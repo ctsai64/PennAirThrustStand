@@ -3,13 +3,15 @@
 
 const int HX711_dout = 0; // MCU > HX711 dout pin
 const int HX711_sck = 1;  // MCU > HX711 sck pin
-const int DHT = 4;
+const int DHTPIN = 4;
 
 unsigned long t = 0;
 
-float t;
+float temp;
 
-DHT dht(DHT, DHT11);
+DHT dht(DHTPIN, DHT11);
+HX711_ADC LoadCell(HX711_dout, HX711_sck);
+
 
 void setup() {
   Serial.begin(9600);
@@ -18,9 +20,9 @@ void setup() {
   Serial.println("Starting...");
 
   dht.begin();
-  t = dht.readTemperature();
-  Serial.print("Temperature: ");
-  Serial.println(t);
+  //temp = dht.readTemperature();
+  //Serial.print("Temperature: ");
+  //Serial.println(temp);
 
 
   LoadCell.begin();
@@ -57,6 +59,10 @@ void loop() {
       float i = LoadCell.getData();
       Serial.print("Load cell output val: ");
       Serial.println(i);
+      dht.begin();
+      temp = dht.readTemperature();
+      Serial.print("Temperature: ");
+      Serial.println(temp);
       newDataReady = false;
       t = millis();
     }
