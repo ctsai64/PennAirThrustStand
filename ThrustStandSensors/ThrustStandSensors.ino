@@ -6,16 +6,19 @@
 const int HX711_dout = 0; // MCU > HX711 dout pin
 const int HX711_sck = 1;  // MCU > HX711 sck pin
 const int DHTPIN = 4;
+const int hall = 5;
 
 unsigned long t = 0;
-
 float temp;
+int hallVal;
+
 
 DHT dht(DHTPIN, DHT11);
 HX711_ADC LoadCell(HX711_dout, HX711_sck);
 
 
 void setup() {
+  pinMode(hall, INPUT);
   Serial.begin(9600);
   delay(10);
   Serial.println();
@@ -65,6 +68,10 @@ void loop() {
       temp = dht.readTemperature();
       Serial.print("Temperature: ");
       Serial.println(temp);
+      hallVal = digitalRead(hall);
+      if(val == HIGH){
+        Serial.println(val);
+      }
       newDataReady = false;
       t = millis();
     }
