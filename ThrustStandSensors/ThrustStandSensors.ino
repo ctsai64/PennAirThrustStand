@@ -1,3 +1,5 @@
+// Load cell, temperture sensor
+
 #include <HX711_ADC.h>
 #include <DHT.h>
 
