@@ -1,0 +1,191 @@
+// Load cell, temperature sensor, RPM measurement, Voltage sensing, and Current sensing
+#include <HX711_ADC.h>
+#include <DHT.h>
+
+// ----- EXISTING SENSORS -----
+const int HX711_dout = 0;
+const int HX711_sck = 1;
+const int DHTPIN = 4;
+const int hall = 5;
+const int voltageSensorPin = A2;  // 0–25V sensor
+
+// ----- CURRENT SENSOR (ACS712) -----
+const int currentSensorPin = A0;
+const int zeroButton = 7;
+
+// Set this for your ACS712 version:
+// 5A = 185 mV/A
+// 20A = 100 mV/A
+// 30A = 66 mV/A
+float mVperAmp = 66;     // <--- CHANGE IF NEEDED
+float zeroOffset = 512;  // default midpoint (0A = Vcc/2)
+
+// ----- RPM -----
+volatile unsigned long pulseCount = 0;
+unsigned long lastTime = 0;
+float rpm = 0;
+const int magnets = 8;
+const unsigned long interval = 1000;
+
+// ----- Load Cell / Temp -----
+float temp;
+unsigned long t = 0;
+float voltage = 0;
+
+DHT dht(DHTPIN, DHT11);
+HX711_ADC LoadCell(HX711_dout, HX711_sck);
+
+void countPulse() {
+  pulseCount++;
+}
+
+// ----- SETUP -----
+void setup() {
+  Serial.begin(9600);
+
+  pinMode(hall, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(hall), countPulse, FALLING);
+
+  pinMode(zeroButton, INPUT_PULLUP);
+
+  dht.begin();
+  LoadCell.begin();
+
+  unsigned long stabilizingtime = 2000;
+  delay(10);
+
+  Serial.println("\nStarting...");
+  LoadCell.start(stabilizingtime, true);
+
+  if (LoadCell.getTareTimeoutFlag() || LoadCell.getSignalTimeoutFlag()) {
+    Serial.println("Timeout, check HX711 wiring!");
+    while (1);
+  }
+
+  LoadCell.setCalFactor(1.0);
+  Serial.println("Startup complete");
+
+  while (!LoadCell.update());
+  calibrate();
+}
+
+// ----- LOOP -----
+void loop() {
+  static bool newDataReady = false;
+  const unsigned long serialPrintInterval = 1000;
+
+  if (LoadCell.update()) newDataReady = true;
+
+  if (newDataReady && millis() - t > serialPrintInterval) {
+    newDataReady = false;
+    t = millis();
+    Serial.println();
+
+    // Load Cell
+    Serial.print("Load cell: ");
+    Serial.println(LoadCell.getData());
+
+    // Temperature
+    temp = dht.readTemperature();
+    if (!isnan(temp)) {
+      Serial.print("Temperature: ");
+      Serial.println(temp);
+    }
+
+    // RPM
+    unsigned long currentTime = millis();
+    if (currentTime - lastTime >= interval) {
+      noInterrupts();
+      unsigned long count = pulseCount;
+      pulseCount = 0;
+      interrupts();
+      rpm = (count / (float)magnets) * (60000.0 / interval);
+      Serial.print("RPM: ");
+      Serial.println(rpm, 1);
+      lastTime = currentTime;
+    }
+
+    // Voltage Sensor
+    int sensorValue = analogRead(voltageSensorPin);
+    float sensedVoltage = (sensorValue * 5.0) / 1023.0;
+    voltage = sensedVoltage * 5.0;
+    Serial.print("Voltage: ");
+    Serial.print(voltage);
+    Serial.println(" V");
+
+    // Current Sensor (ACS712)
+    float raw = analogRead(currentSensorPin);
+    float voltageADC = (raw * 5.0) / 1023.0;
+    float offsetVoltage = (zeroOffset * 5.0) / 1023.0;
+    float voltageDiff = voltageADC - offsetVoltage;
+    float current = (voltageDiff * 1000) / mVperAmp;
+    Serial.print("Current: ");
+    Serial.print(current, 3);
+    Serial.println(" A");
+  }
+
+  // Serial Commands
+  if (Serial.available()) {
+    char c = Serial.read();
+    if (c == 't') LoadCell.tareNoDelay();
+    else if (c == 'r') calibrate();
+    else if (c == 'c') changeCalFactor();
+    else if (c == 'z') calibrateZero();  // <-- current sensor zeroing
+  }
+
+  // Button-press zeroing
+  if (digitalRead(zeroButton) == LOW) {
+    calibrateZero();
+  }
+
+  if (LoadCell.getTareStatus()) Serial.println("Tare complete");
+}
+
+// ----- CURRENT SENSOR ZEROING -----
+void calibrateZero() {
+  Serial.println("Zeroing ACS712... ensure NO CURRENT is flowing.");
+  long sum = 0;
+  for (int i = 0; i < 500; i++) {
+    sum += analogRead(currentSensorPin);
+    delay(2);
+  }
+  zeroOffset = sum / 500.0;
+  Serial.print("New zero offset: ");
+  Serial.println(zeroOffset);
+}
+
+// ----- EXISTING LOAD CELL CALIBRATION FUNCTIONS -----
+void calibrate() {
+  Serial.println("***");
+  Serial.println("Start calibration: place load cell level and empty. Send 't' to tare.");
+  while (!LoadCell.getTareStatus()) {
+    LoadCell.update();
+    if (Serial.available() && Serial.read() == 't') LoadCell.tareNoDelay();
+  }
+  Serial.println("Tare complete");
+
+  Serial.println("Place known mass, then send weight:");
+  float known_mass = 0;
+  while (known_mass <= 0) {
+    LoadCell.update();
+    if (Serial.available()) known_mass = Serial.parseFloat();
+  }
+  LoadCell.refreshDataSet();
+  float newCal = LoadCell.getNewCalibration(known_mass);
+  LoadCell.setCalFactor(newCal);
+  Serial.print("New calibration value: ");
+  Serial.println(newCal);
+}
+
+void changeCalFactor() {
+  Serial.print("Current cal: ");
+  Serial.println(LoadCell.getCalFactor());
+  Serial.println("Send new value:");
+  float newCal = 0;
+  while (newCal <= 0) {
+    if (Serial.available()) newCal = Serial.parseFloat();
+  }
+  LoadCell.setCalFactor(newCal);
+  Serial.print("New calibration set: ");
+  Serial.println(newCal);
+}
