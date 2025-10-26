@@ -1,0 +1,148 @@
+// Load cell, temperature sensor, RPM measurement, Voltage sensing, and Current sensing
+#include <HX711_ADC.h>
+#include <DHT.h>
+
+// ----- PINS -----
+const int HX711_dout = 0;
+const int HX711_sck = 1;
+const int DHTPIN = 4;
+const int hall = 5;
+const int voltageSensorPin = A2;
+const int currentSensorPin = A0;
+
+// ----- CURRENT SENSOR (ACS712) -----
+float mVperAmp = 66;     // Change for 5A/20A models
+float zeroOffset = 512;  // Will be recalibrated
+
+// ----- RPM -----
+volatile unsigned long pulseCount = 0;
+unsigned long lastTime = 0;
+float rpm = 0;
+int magnets = 0;
+const unsigned long interval = 1000;
+
+// ----- Load Cell / Temp -----
+float temp;
+unsigned long t = 0;
+float voltage = 0;
+
+DHT dht(DHTPIN, DHT11);
+HX711_ADC LoadCell(HX711_dout, HX711_sck);
+
+void countPulse() {
+  pulseCount++;
+}
+
+void setup() {
+  Serial.begin(9600);
+  delay(200);
+
+  Serial.println("\n---- Welcome to Thrust Testing ----");
+
+  // Ask user for magnets count
+  Serial.println("Enter number of magnets in motor:");
+  while (magnets <= 0) {
+    if (Serial.available()) {
+      magnets = Serial.parseInt();
+    }
+  }
+  Serial.print("Magnets set to: ");
+  Serial.println(magnets);
+
+  // Init sensors
+  pinMode(hall, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(hall), countPulse, FALLING);
+  dht.begin();
+  LoadCell.begin();
+  LoadCell.start(2000, true);
+  LoadCell.setCalFactor(1.0);
+
+  // ---------------- LOAD CELL TARE REQUEST ----------------
+  Serial.println("\nEnter t to tare load cell: );
+  while (true) {
+    if (Serial.available()) {
+      String cmd = Serial.readStringUntil('\n');
+      cmd.trim();
+      if (cmd == "t") {
+        LoadCell.tare();
+        while (!LoadCell.getTareStatus()) LoadCell.update();
+        Serial.println("Load cell tare complete.");
+        break;
+      }
+    }
+  }
+
+  // ---------------- CURRENT ZERO REQUEST ----------------
+  Serial.println("\nEnter z to zero current sensor:  ");
+  while (true) {
+    if (Serial.available()) {
+      String cmd = Serial.readStringUntil('\n');
+      cmd.trim();
+      if (cmd == "z") {
+        long sum = 0;
+        for (int i = 0; i < 500; i++) {
+          sum += analogRead(currentSensorPin);
+          delay(2);
+        }
+        zeroOffset = sum / 500.0;
+        Serial.print("Current zero offset set to: ");
+        Serial.println(zeroOffset);
+        break;
+      }
+    }
+  }
+
+  Serial.println("\nStartup complete.\nCollecting data...\n");
+}
+
+void loop() {
+  static bool newDataReady = false;
+  const unsigned long printInterval = 1000;
+
+  if (LoadCell.update()) newDataReady = true;
+
+  if (newDataReady && millis() - t > printInterval) {
+    newDataReady = false;
+    t = millis();
+    Serial.println();
+
+    // Load Cell
+    Serial.print("Load Raw: ");
+    Serial.println(LoadCell.getData());
+
+    // Temperature
+    temp = dht.readTemperature();
+    Serial.print("Temp: ");
+    Serial.println(temp);
+
+    // RPM
+    unsigned long currentTime = millis();
+    if (currentTime - lastTime >= interval) {
+      noInterrupts();
+      unsigned long count = pulseCount;
+      pulseCount = 0;
+      interrupts();
+      rpm = (count / (float)magnets) * (60000.0 / interval);
+      Serial.print("RPM: ");
+      Serial.println(rpm);
+      lastTime = currentTime;
+    }
+
+    // Voltage
+    int sensorValue = analogRead(voltageSensorPin);
+    float sensedVoltage = (sensorValue * 5.0) / 1023.0;
+    voltage = sensedVoltage * 5.0; // 0–25V scaling
+    Serial.print("Voltage: ");
+    Serial.print(voltage);
+    Serial.println(" V");
+
+    // Current
+    float raw = analogRead(currentSensorPin);
+    float voltageADC = (raw * 5.0) / 1023.0;
+    float offsetVoltage = (zeroOffset * 5.0) / 1023.0;
+    float current = ((voltageADC - offsetVoltage) * 1000.0) / mVperAmp;
+    Serial.print("Current: ");
+    Serial.print(current, 3);
+    Serial.println(" A");
+  }
+}
