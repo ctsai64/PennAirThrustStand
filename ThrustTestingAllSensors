@@ -20,7 +20,7 @@ float zeroOffset = 512;  // Will be recalibrated
 volatile unsigned long pulseCount = 0;
 unsigned long lastTime = 0;
 float rpm = 0;
-int magnets = 0;
+int magnets = 8;  // Default value, change with 'm' command
 const unsigned long interval = 1000;
 
 // ----- Load Cell / Temp -----
@@ -39,16 +39,9 @@ void setup() {
   Serial.begin(9600);
   delay(200);
 
-  Serial.println("\n---- Welcome to Thrust Testing ----");
-
-  // Ask user for magnets count
-  Serial.println("Enter number of magnets in motor:");
-  while (magnets <= 0) {
-    if (Serial.available()) {
-      magnets = Serial.parseInt();
-    }
-  }
-  Serial.print("Magnets set to: ");
+  Serial.println("\n---- Thrust Testing Ready ----");
+  Serial.println("Commands: t=tare, z=zero current, m=set magnets");
+  Serial.print("Default magnets: ");
   Serial.println(magnets);
 
   // Init sensors
@@ -59,47 +52,42 @@ void setup() {
   LoadCell.start(2000, true);
   LoadCell.setCalFactor(1.0);
 
-  // ---------------- LOAD CELL TARE REQUEST ----------------
-  Serial.println("\nEnter t to tare load cell: );
-  while (true) {
-    if (Serial.available()) {
-      String cmd = Serial.readStringUntil('\n');
-      cmd.trim();
-      if (cmd == "t") {
-        LoadCell.tare();
-        while (!LoadCell.getTareStatus()) LoadCell.update();
-        Serial.println("Load cell tare complete.");
-        break;
-      }
-    }
-  }
-
-  // ---------------- CURRENT ZERO REQUEST ----------------
-  Serial.println("\nEnter z to zero current sensor:  ");
-  while (true) {
-    if (Serial.available()) {
-      String cmd = Serial.readStringUntil('\n');
-      cmd.trim();
-      if (cmd == "z") {
-        long sum = 0;
-        for (int i = 0; i < 500; i++) {
-          sum += analogRead(currentSensorPin);
-          delay(2);
-        }
-        zeroOffset = sum / 500.0;
-        Serial.print("Current zero offset set to: ");
-        Serial.println(zeroOffset);
-        break;
-      }
-    }
-  }
-
-  Serial.println("\nStartup complete.\nCollecting data...\n");
+  Serial.println("Collecting data...\n");
 }
 
 void loop() {
   static bool newDataReady = false;
   const unsigned long printInterval = 1000;
+
+  // Check for serial commands
+  if (Serial.available()) {
+    char cmd = Serial.read();
+    
+    if (cmd == 't') {
+      LoadCell.tare();
+      Serial.println("Taring load cell...");
+      while (!LoadCell.getTareStatus()) LoadCell.update();
+      Serial.println("Tare complete.");
+    }
+    else if (cmd == 'z') {
+      Serial.println("Zeroing current sensor...");
+      long sum = 0;
+      for (int i = 0; i < 500; i++) {
+        sum += analogRead(currentSensorPin);
+        delay(2);
+      }
+      zeroOffset = sum / 500.0;
+      Serial.print("Zero offset: ");
+      Serial.println(zeroOffset);
+    }
+    else if (cmd == 'm') {
+      Serial.println("Enter magnet count:");
+      while (!Serial.available()) { delay(10); }
+      magnets = Serial.parseInt();
+      Serial.print("Magnets set to: ");
+      Serial.println(magnets);
+    }
+  }
 
   if (LoadCell.update()) newDataReady = true;
 
