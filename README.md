@@ -21,7 +21,7 @@ A complete thrust testing system with real-time GUI visualization for measuring 
 ## Wiring Guide
 
 ### HX711 Load Cell Amplifier
-* VCC -> 5V
+* VCC -> VCC
 * GND -> GND
 * DT -> D0
 * SCK -> D1
