@@ -116,6 +116,10 @@ class ThrustStandGUI(QMainWindow):
         self.export_btn.setEnabled(False)
         button_layout.addWidget(self.export_btn)
         
+        self.autoscale_btn = QPushButton("Auto-Scale All")
+        self.autoscale_btn.clicked.connect(self.autoscale_plots)
+        button_layout.addWidget(self.autoscale_btn)
+        
         control_layout.addLayout(button_layout)
         
         # Checkboxes for plot visibility
@@ -154,6 +158,9 @@ class ThrustStandGUI(QMainWindow):
         plot_widget.setLabel('left', y_label, color='k')
         plot_widget.setLabel('bottom', 'Time (s)', color='k')
         plot_widget.showGrid(x=True, y=True, alpha=0.3)
+        
+        # Set time axis to start at 0
+        plot_widget.setXRange(0, 10, padding=0)
         
         # Create plot curve
         curve = plot_widget.plot(pen=pg.mkPen(color=color, width=2))
@@ -275,12 +282,64 @@ class ThrustStandGUI(QMainWindow):
         
         if self.plots['current']['visible']:
             self.plots['current']['curve'].setData(time_array, np.array(self.current_data))
+        
+        # Keep time axis from going negative
+        if len(time_array) > 0:
+            min_time = max(0, time_array[0])
+            max_time = max(10, time_array[-1])
+            for plot_name, plot_info in self.plots.items():
+                if plot_info['visible']:
+                    plot_info['widget'].setXRange(min_time, max_time, padding=0.02)
     
     def toggle_plot(self, measurement, state):
         """Show or hide a plot."""
         is_checked = state == 2  # Qt.Checked
         self.plots[measurement]['visible'] = is_checked
         self.plots[measurement]['widget'].setVisible(is_checked)
+    
+    def autoscale_plots(self):
+        """Auto-scale all visible plots to fit data perfectly."""
+        if len(self.time_data) == 0:
+            QMessageBox.information(self, "No Data", "No data to scale. Start a test first.")
+            return
+        
+        time_array = np.array(self.time_data)
+        min_time = max(0, time_array[0])  # Never go negative
+        max_time = time_array[-1]
+        
+        # Auto-scale each visible plot
+        data_map = {
+            'thrust': self.thrust_data,
+            'rpm': self.rpm_data,
+            'temperature': self.temperature_data,
+            'voltage': self.voltage_data,
+            'current': self.current_data
+        }
+        
+        for plot_name, plot_info in self.plots.items():
+            if plot_info['visible'] and len(data_map[plot_name]) > 0:
+                data_array = np.array(data_map[plot_name])
+                
+                # Set X range (time) - never negative
+                plot_info['widget'].setXRange(min_time, max_time, padding=0.02)
+                
+                # Set Y range with padding
+                min_val = np.min(data_array)
+                max_val = np.max(data_array)
+                
+                # Add 5% padding on Y axis
+                if max_val != min_val:
+                    y_range = max_val - min_val
+                    plot_info['widget'].setYRange(
+                        min_val - 0.05 * y_range,
+                        max_val + 0.05 * y_range,
+                        padding=0
+                    )
+                else:
+                    # If all values are the same, center with fixed range
+                    plot_info['widget'].setYRange(min_val - 1, max_val + 1, padding=0)
+        
+        QMessageBox.information(self, "Auto-Scale", "All plots have been auto-scaled to fit data.")
     
     def export_to_csv(self):
         """Export collected data to CSV file."""
