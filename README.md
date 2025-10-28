@@ -1,4 +1,4 @@
-# Custom Thrust Testing
+# PennAiR Custom Thrust Stand with DAQ
 
 A complete thrust testing system with real-time GUI visualization for measuring load, motor RPM, voltage, current, and temperature during motor testing.
 
@@ -7,7 +7,7 @@ A complete thrust testing system with real-time GUI visualization for measuring 
 - **Live Data Visualization**: Real-time graphs of all measurements
 - **Flexible Display**: Toggle individual graphs on/off with checkboxes
 - **Data Export**: Save test results to CSV for analysis
-- **Professional GUI**: Clean interface built with PyQt5
+- **Professional GUI**: Interface built with PyQt5
 - **Comprehensive Sensing**: Thrust, RPM, temperature, voltage, and current
 
 ## Hardware
