@@ -1,3 +1,5 @@
+// NOTE: This one hasn't actully been tested yet, it's the cleaned up version; if this doesn't work use the ThrustStandSensors code (last working program)
+
 // Load cell, temperature sensor, RPM measurement, Voltage sensing, and Current sensing
 #include <HX711_ADC.h>
 #include <DHT.h>
