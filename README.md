@@ -89,7 +89,7 @@ Voltage Measurement Wiring :
 
 1. **Navigate to Project Directory**:
    ```powershell
-   cd C:\Users\ddchung\Projects\thrust_stand
+   cd \copy\to\your\path
    ```
 
 2. **Install Python Dependencies**:
