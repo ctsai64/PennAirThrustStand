@@ -15,7 +15,7 @@ class ThrustStandGUI(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Thrust Stand Monitor")
-        self.setGeometry(100, 100, 1400, 900)
+        self.setGeometry(100, 100, 1600, 900)
         
         # Serial reader
         self.serial_reader = SerialReader()
@@ -48,24 +48,46 @@ class ThrustStandGUI(QMainWindow):
         control_panel = self.create_control_panel()
         main_layout.addWidget(control_panel)
         
-        # Plot area
+        # Create horizontal layout for plots and live data
+        content_layout = QHBoxLayout()
+        
+        # Plot area (left side) - use grid for square graphs
         plot_layout = QVBoxLayout()
         
-        # Create individual plots
+        # Row 1: Thrust and RPM
+        row1_layout = QHBoxLayout()
+        # Row 2: Temperature and Voltage
+        row2_layout = QHBoxLayout()
+        # Row 3: Current (centered)
+        row3_layout = QHBoxLayout()
+        
+        # Create individual plots with square aspect
         self.thrust_plot = self.create_plot("Thrust (grams)", "g", (255, 0, 0))
         self.rpm_plot = self.create_plot("RPM", "RPM", (0, 255, 0))
         self.temp_plot = self.create_plot("Temperature (°C)", "°C", (0, 0, 255))
-        self.voltage_plot = self.create_plot("Voltage (V)", "V", (255, 255, 0))
+        self.voltage_plot = self.create_plot("Voltage (V)", "V", (255, 165, 0))
         self.current_plot = self.create_plot("Current (A)", "A", (255, 0, 255))
         
-        # Add plots to layout
-        plot_layout.addWidget(self.thrust_plot['widget'])
-        plot_layout.addWidget(self.rpm_plot['widget'])
-        plot_layout.addWidget(self.temp_plot['widget'])
-        plot_layout.addWidget(self.voltage_plot['widget'])
-        plot_layout.addWidget(self.current_plot['widget'])
+        # Arrange plots in grid (2x2 + 1)
+        row1_layout.addWidget(self.thrust_plot['widget'])
+        row1_layout.addWidget(self.rpm_plot['widget'])
         
-        main_layout.addLayout(plot_layout)
+        row2_layout.addWidget(self.temp_plot['widget'])
+        row2_layout.addWidget(self.voltage_plot['widget'])
+        
+        row3_layout.addWidget(self.current_plot['widget'])
+        
+        plot_layout.addLayout(row1_layout)
+        plot_layout.addLayout(row2_layout)
+        plot_layout.addLayout(row3_layout)
+        
+        content_layout.addLayout(plot_layout, 3)  # 75% width
+        
+        # Live data display panel (right side)
+        live_data_panel = self.create_live_data_panel()
+        content_layout.addWidget(live_data_panel, 1)  # 25% width
+        
+        main_layout.addLayout(content_layout)
         
         # Store plot references
         self.plots = {
@@ -150,6 +172,66 @@ class ThrustStandGUI(QMainWindow):
         control_group.setLayout(control_layout)
         return control_group
     
+    def create_live_data_panel(self):
+        """Create live data display panel."""
+        data_group = QGroupBox("Live Data")
+        data_layout = QVBoxLayout()
+        data_group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                font-size: 14pt;
+                border: 2px solid #3498db;
+                border-radius: 5px;
+                margin-top: 10px;
+                padding: 15px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """)
+        
+        # Create labels for each measurement
+        label_style = """
+            font-size: 16pt;
+            font-weight: bold;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 5px;
+        """
+        
+        # Thrust
+        self.thrust_value_label = QLabel("Thrust: --- g")
+        self.thrust_value_label.setStyleSheet(label_style + "background-color: #ffebee; color: #c62828;")
+        data_layout.addWidget(self.thrust_value_label)
+        
+        # RPM
+        self.rpm_value_label = QLabel("RPM: --- RPM")
+        self.rpm_value_label.setStyleSheet(label_style + "background-color: #e8f5e9; color: #2e7d32;")
+        data_layout.addWidget(self.rpm_value_label)
+        
+        # Temperature
+        self.temp_value_label = QLabel("Temp: --- °C")
+        self.temp_value_label.setStyleSheet(label_style + "background-color: #e3f2fd; color: #1565c0;")
+        data_layout.addWidget(self.temp_value_label)
+        
+        # Voltage
+        self.voltage_value_label = QLabel("Voltage: --- V")
+        self.voltage_value_label.setStyleSheet(label_style + "background-color: #fff3e0; color: #e65100;")
+        data_layout.addWidget(self.voltage_value_label)
+        
+        # Current
+        self.current_value_label = QLabel("Current: --- A")
+        self.current_value_label.setStyleSheet(label_style + "background-color: #f3e5f5; color: #6a1b9a;")
+        data_layout.addWidget(self.current_value_label)
+        
+        # Add spacer
+        data_layout.addStretch()
+        
+        data_group.setLayout(data_layout)
+        return data_group
+    
     def create_plot(self, title, y_label, color):
         """Create a plot widget."""
         plot_widget = pg.PlotWidget()
@@ -158,6 +240,10 @@ class ThrustStandGUI(QMainWindow):
         plot_widget.setLabel('left', y_label, color='k')
         plot_widget.setLabel('bottom', 'Time (s)', color='k')
         plot_widget.showGrid(x=True, y=True, alpha=0.3)
+        
+        # Set minimum size for more square appearance
+        plot_widget.setMinimumHeight(250)
+        plot_widget.setMinimumWidth(400)
         
         # Set time axis to start at 0
         plot_widget.setXRange(0, 10, padding=0)
@@ -259,11 +345,24 @@ class ThrustStandGUI(QMainWindow):
         self.time_data.append(current_time)
         
         # Store data
-        self.thrust_data.append(data.get('thrust', 0) or 0)
-        self.rpm_data.append(data.get('rpm', 0) or 0)
-        self.temperature_data.append(data.get('temperature', 0) or 0)
-        self.voltage_data.append(data.get('voltage', 0) or 0)
-        self.current_data.append(data.get('current', 0) or 0)
+        thrust_val = data.get('thrust', 0) or 0
+        rpm_val = data.get('rpm', 0) or 0
+        temp_val = data.get('temperature', 0) or 0
+        voltage_val = data.get('voltage', 0) or 0
+        current_val = data.get('current', 0) or 0
+        
+        self.thrust_data.append(thrust_val)
+        self.rpm_data.append(rpm_val)
+        self.temperature_data.append(temp_val)
+        self.voltage_data.append(voltage_val)
+        self.current_data.append(current_val)
+        
+        # Update live value labels
+        self.thrust_value_label.setText(f"Thrust: {thrust_val:.2f} g")
+        self.rpm_value_label.setText(f"RPM: {rpm_val:.1f} RPM")
+        self.temp_value_label.setText(f"Temp: {temp_val:.1f} °C")
+        self.voltage_value_label.setText(f"Voltage: {voltage_val:.2f} V")
+        self.current_value_label.setText(f"Current: {current_val:.3f} A")
         
         # Update plots
         time_array = np.array(self.time_data)
