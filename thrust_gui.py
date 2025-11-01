@@ -312,6 +312,8 @@ class ThrustStandGUI(QMainWindow):
         self.timer.start(100)
         self.status_label.setText("Status: Test Running")
         self.status_label.setStyleSheet("color: blue; font-weight: bold; font-size: 12pt;")
+        # Record initial data point at t=0
+        self.update_plots()
     
     def stop_test(self):
         """Stop data acquisition."""
