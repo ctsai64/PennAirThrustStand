@@ -188,14 +188,14 @@ Motor,TMotor 2820
 Propeller,APC 10x4.7
 Exported,2025-11-01 17:45:12
 
-Time (s),Thrust (g),RPM,Temperature (°C),Voltage (V),Current (A)
-0.000,0.000,0.0,25.00,12.000,0.000
-0.100,12.345,5500.0,25.10,12.050,2.456
+Time (s),Thrust (g),RPM,Temperature (°C),Voltage (V),Current (A),Power (W)
+0.000,0.000,0.0,25.00,12.000,0.000,0.000
+0.100,12.345,5500.0,25.10,12.050,2.456,29.622
 ...
 ```
 
 Notes:
-- Power (W) is computed from Voltage × Current in the app and shown on plots, but it is not added as a separate CSV column by default. If you want it included, we can add it as an additional column.
+- Power (W) is included as a CSV column (Voltage × Current per sample).
 - Hover readouts in the app snap to the nearest plotted data point for precise values.
 
 ## Serial Commands (Arduino)

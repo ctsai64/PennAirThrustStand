@@ -283,6 +283,7 @@ class ThrustStandGUI(QMainWindow):
         temps = []
         volts = []
         currents = []
+        powers = []
         try:
             with open(path, 'r', newline='') as f:
                 reader = csv.reader(f)
@@ -305,10 +306,15 @@ class ThrustStandGUI(QMainWindow):
                         te = float(row[3])
                         v = float(row[4])
                         c = float(row[5])
+                        p = None
+                        if len(row) >= 7 and row[6] != "":
+                            p = float(row[6])
                     except Exception:
                         continue
                     times.append(t); thrusts.append(th); rpms.append(r)
                     temps.append(te); volts.append(v); currents.append(c)
+                    if p is not None:
+                        powers.append(p)
         except Exception as e:
             QMessageBox.critical(self, "History Load Error", str(e))
             return
@@ -326,23 +332,25 @@ class ThrustStandGUI(QMainWindow):
         set_curve(self.h_temp_plot, temps)
         set_curve(self.h_voltage_plot, volts)
         set_curve(self.h_current_plot, currents)
-        # Power = Voltage * Current
-        powers = []
-        if len(volts) == len(currents):
-            try:
-                powers = (np.array(volts, dtype=float) * np.array(currents, dtype=float)).tolist()
-            except Exception:
-                powers = []
+        # Power: use CSV column if present; otherwise compute Voltage * Current
+        if len(powers) != len(times):
+            powers = []
+            if len(volts) == len(currents):
+                try:
+                    powers = (np.array(volts, dtype=float) * np.array(currents, dtype=float)).tolist()
+                except Exception:
+                    powers = []
         set_curve(self.h_power_plot, powers)
 
         # Update table
-        cols = ['Time (s)', 'Thrust (g)', 'RPM', 'Temperature (°C)', 'Voltage (V)', 'Current (A)']
+        cols = ['Time (s)', 'Thrust (g)', 'RPM', 'Temperature (°C)', 'Voltage (V)', 'Current (A)', 'Power (W)']
         self.history_table.clear()
         self.history_table.setColumnCount(len(cols))
         self.history_table.setHorizontalHeaderLabels(cols)
         self.history_table.setRowCount(len(times))
         for i in range(len(times)):
-            values = [f"{times[i]:.3f}", f"{thrusts[i]:.3f}", f"{rpms[i]:.1f}", f"{temps[i]:.2f}", f"{volts[i]:.3f}", f"{currents[i]:.3f}"]
+            pval = powers[i] if i < len(powers) else (volts[i] * currents[i] if i < len(volts) and i < len(currents) else 0)
+            values = [f"{times[i]:.3f}", f"{thrusts[i]:.3f}", f"{rpms[i]:.1f}", f"{temps[i]:.2f}", f"{volts[i]:.3f}", f"{currents[i]:.3f}", f"{pval:.3f}"]
             for j, val in enumerate(values):
                 self.history_table.setItem(i, j, QTableWidgetItem(val))
     
@@ -732,7 +740,7 @@ class ThrustStandGUI(QMainWindow):
                 writer.writerow(["Exported", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
                 writer.writerow([])
                 # Header
-                writer.writerow(['Time (s)', 'Thrust (g)', 'RPM', 'Temperature (°C)', 'Voltage (V)', 'Current (A)'])
+                writer.writerow(['Time (s)', 'Thrust (g)', 'RPM', 'Temperature (°C)', 'Voltage (V)', 'Current (A)', 'Power (W)'])
                 
                 # Write data rows
                 for i in range(len(self.time_history)):
@@ -742,7 +750,8 @@ class ThrustStandGUI(QMainWindow):
                         f"{self.rpm_history[i]:.1f}",
                         f"{self.temperature_history[i]:.2f}",
                         f"{self.voltage_history[i]:.3f}",
-                        f"{self.current_history[i]:.3f}"
+                        f"{self.current_history[i]:.3f}",
+                        f"{self.power_history[i]:.3f}"
                     ])
             
             QMessageBox.information(self, "Export Successful", f"Data exported to:\n{filename}")
