@@ -4,11 +4,14 @@ A complete thrust testing system with real-time GUI visualization for measuring 
 
 ## Features
 
-- **Live Data Visualization**: Real-time graphs of all measurements
+- **Live Data Visualization**: Real-time graphs of thrust, RPM, temperature, voltage, current, and power
 - **Flexible Display**: Toggle individual graphs on/off with checkboxes
+- **Hover Readout**: Crosshair + marker with x,y values that snap to nearest data point
+- **History Tab**: Browse past CSVs, view plots and raw data table, refresh to rescan files
+- **Metadata in CSV**: Enter Motor and Propeller; values are included at top of CSV export
 - **Data Export**: Save test results to CSV for analysis
 - **Professional GUI**: Interface built with PyQt5
-- **Comprehensive Sensing**: Thrust, RPM, temperature, voltage, and current
+- **Comprehensive Sensing**: Thrust, RPM, temperature, voltage, current (with computed power)
 
 ## Hardware
 * HX711 Load Cell Amplifier + Load Cell
@@ -108,7 +111,7 @@ Voltage Measurement Wiring :
    python thrust_gui.py
    ```
 
-### Step 3: Running a Test
+### Step 3: Running a Test (Live Tab)
 
 1. **Connect to Arduino**:
    - Select your COM port from the dropdown (e.g., COM10)
@@ -119,18 +122,30 @@ Voltage Measurement Wiring :
 2. **Start Data Collection**:
    - Click "Start Test"
    - All graphs will begin updating in real-time
-   - Use checkboxes to show/hide specific measurements:
-     - ☑ Thrust (g)
-     - ☑ RPM
-     - ☑ Temperature (°C)
-     - ☑ Voltage (V)
-     - ☑ Current (A)
+  - Use checkboxes to show/hide specific measurements:
+    - ☑ Thrust (g)
+    - ☑ RPM
+    - ☑ Temperature (°C)
+    - ☑ Voltage (V)
+    - ☑ Current (A)
+    - ☑ Power (W)
+  - Hover over a graph to see a crosshair and dot marker; the label shows the nearest data point’s x and y
 
 3. **Stop and Export**:
    - Click "Stop Test" when finished
-   - Click "Export to CSV" to save your data
+  - Optional: Click "Auto-Scale All" (larger "A" button) to fit axes to the full run
+  - Click "Export to CSV" to save your data
    - Choose a filename and location
    - Data is saved with timestamp and ready for analysis
+
+### Step 4: Viewing Past Tests (History Tab)
+
+1. Open the "History" tab
+2. Click "Refresh" to rescan for `thrust_test_*.csv` files in the project directory
+3. Select a CSV to view
+   - Plots for thrust, RPM, temperature, voltage, current, and computed power
+   - Raw data table with all rows
+4. Hover over plots to see snapped x,y readouts with markers
 
 ## Troubleshooting
 
@@ -167,15 +182,21 @@ Voltage Measurement Wiring :
 
 ## CSV Export Format
 
-Exported files contain comma-separated values:
+Each CSV includes optional metadata rows, a blank spacer row, then the data header and rows:
 ```csv
+Motor,TMotor 2820
+Propeller,APC 10x4.7
+Exported,2025-11-01 17:45:12
+
 Time (s),Thrust (g),RPM,Temperature (°C),Voltage (V),Current (A)
 0.000,0.000,0.0,25.00,12.000,0.000
 0.100,12.345,5500.0,25.10,12.050,2.456
 ...
 ```
 
-Easily imported into Excel, MATLAB, Python (pandas), or any analysis tool.
+Notes:
+- Power (W) is computed from Voltage × Current in the app and shown on plots, but it is not added as a separate CSV column by default. If you want it included, we can add it as an additional column.
+- Hover readouts in the app snap to the nearest plotted data point for precise values.
 
 ## Serial Commands (Arduino)
 
