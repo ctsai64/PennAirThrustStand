@@ -1,8 +1,11 @@
 import sys
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QCheckBox, QPushButton, QComboBox, 
-                             QLabel, QGroupBox, QMessageBox, QFileDialog)
-from PyQt5.QtCore import QTimer
+                             QLabel, QGroupBox, QMessageBox, QFileDialog, QLineEdit, 
+                             QTabWidget, QListWidget, QTableWidget, QTableWidgetItem)
+import os
+import glob
+from PyQt5.QtCore import QTimer, QPointF
 import pyqtgraph as pg
 from collections import deque
 import numpy as np
@@ -20,14 +23,23 @@ class ThrustStandGUI(QMainWindow):
         # Serial reader
         self.serial_reader = SerialReader()
         
-        # Data storage (keep last 500 points)
-        self.max_points = 500
-        self.time_data = deque(maxlen=self.max_points)
-        self.thrust_data = deque(maxlen=self.max_points)
-        self.rpm_data = deque(maxlen=self.max_points)
-        self.temperature_data = deque(maxlen=self.max_points)
-        self.voltage_data = deque(maxlen=self.max_points)
-        self.current_data = deque(maxlen=self.max_points)
+        # Data storage (keep all points; unbounded growth)
+        self.max_points = None
+        self.time_data = deque()
+        self.thrust_data = deque()
+        self.rpm_data = deque()
+        self.temperature_data = deque()
+        self.voltage_data = deque()
+        self.current_data = deque()
+        self.power_data = deque()
+        # Full history arrays (not truncated)
+        self.time_history = []
+        self.thrust_history = []
+        self.rpm_history = []
+        self.temperature_history = []
+        self.voltage_history = []
+        self.current_history = []
+        self.power_history = []
         self.start_time = 0
         
         # Timer for updating plots
@@ -43,11 +55,20 @@ class ThrustStandGUI(QMainWindow):
         self.setCentralWidget(main_widget)
         main_layout = QVBoxLayout()
         main_widget.setLayout(main_layout)
-        
+
+        # Tabs
+        self.tabs = QTabWidget()
+        main_layout.addWidget(self.tabs)
+
+        # Live tab content
+        live_tab = QWidget()
+        live_layout = QVBoxLayout()
+        live_tab.setLayout(live_layout)
+
         # Control panel
         control_panel = self.create_control_panel()
-        main_layout.addWidget(control_panel)
-        
+        live_layout.addWidget(control_panel)
+
         # Create horizontal layout for plots and live data
         content_layout = QHBoxLayout()
         
@@ -58,7 +79,7 @@ class ThrustStandGUI(QMainWindow):
         row1_layout = QHBoxLayout()
         # Row 2: Temperature and Voltage
         row2_layout = QHBoxLayout()
-        # Row 3: Current (centered)
+        # Row 3: Current and Power
         row3_layout = QHBoxLayout()
         
         # Create individual plots with square aspect
@@ -67,6 +88,7 @@ class ThrustStandGUI(QMainWindow):
         self.temp_plot = self.create_plot("Temperature (°C)", "°C", (0, 0, 255))
         self.voltage_plot = self.create_plot("Voltage (V)", "V", (255, 165, 0))
         self.current_plot = self.create_plot("Current (A)", "A", (255, 0, 255))
+        self.power_plot = self.create_plot("Power (W)", "W", (0, 0, 0))
         
         # Arrange plots in grid (2x2 + 1)
         row1_layout.addWidget(self.thrust_plot['widget'])
@@ -76,6 +98,7 @@ class ThrustStandGUI(QMainWindow):
         row2_layout.addWidget(self.voltage_plot['widget'])
         
         row3_layout.addWidget(self.current_plot['widget'])
+        row3_layout.addWidget(self.power_plot['widget'])
         
         plot_layout.addLayout(row1_layout)
         plot_layout.addLayout(row2_layout)
@@ -87,7 +110,13 @@ class ThrustStandGUI(QMainWindow):
         live_data_panel = self.create_live_data_panel()
         content_layout.addWidget(live_data_panel, 1)  # 25% width
         
-        main_layout.addLayout(content_layout)
+        live_layout.addLayout(content_layout)
+
+        self.tabs.addTab(live_tab, "Live")
+
+        # History tab
+        history_tab = self.create_history_tab()
+        self.tabs.addTab(history_tab, "History")
         
         # Store plot references
         self.plots = {
@@ -95,7 +124,8 @@ class ThrustStandGUI(QMainWindow):
             'rpm': self.rpm_plot,
             'temperature': self.temp_plot,
             'voltage': self.voltage_plot,
-            'current': self.current_plot
+            'current': self.current_plot,
+            'power': self.power_plot
         }
         
     def create_control_panel(self):
@@ -140,9 +170,25 @@ class ThrustStandGUI(QMainWindow):
         
         self.autoscale_btn = QPushButton("Auto-Scale All")
         self.autoscale_btn.clicked.connect(self.autoscale_plots)
+        self.autoscale_btn.setMinimumHeight(44)
+        self.autoscale_btn.setStyleSheet("font-size: 14pt; padding: 8px 16px;")
         button_layout.addWidget(self.autoscale_btn)
         
         control_layout.addLayout(button_layout)
+
+        # Test metadata inputs
+        meta_layout = QVBoxLayout()
+        meta_label = QLabel("Test Metadata:")
+        meta_layout.addWidget(meta_label)
+        self.motor_name_input = QLineEdit()
+        self.motor_name_input.setPlaceholderText("Motor name/model")
+        meta_layout.addWidget(QLabel("Motor:"))
+        meta_layout.addWidget(self.motor_name_input)
+        self.prop_type_input = QLineEdit()
+        self.prop_type_input.setPlaceholderText("Propeller type/size")
+        meta_layout.addWidget(QLabel("Propeller:"))
+        meta_layout.addWidget(self.prop_type_input)
+        control_layout.addLayout(meta_layout)
         
         # Checkboxes for plot visibility
         checkbox_layout = QVBoxLayout()
@@ -150,8 +196,8 @@ class ThrustStandGUI(QMainWindow):
         checkbox_layout.addWidget(checkbox_label)
         
         self.checkboxes = {}
-        measurements = ['thrust', 'rpm', 'temperature', 'voltage', 'current']
-        labels = ['Thrust (g)', 'RPM', 'Temperature (°C)', 'Voltage (V)', 'Current (A)']
+        measurements = ['thrust', 'rpm', 'temperature', 'voltage', 'current', 'power']
+        labels = ['Thrust (g)', 'RPM', 'Temperature (°C)', 'Voltage (V)', 'Current (A)', 'Power (W)']
         
         for measure, label in zip(measurements, labels):
             cb = QCheckBox(label)
@@ -171,6 +217,134 @@ class ThrustStandGUI(QMainWindow):
         
         control_group.setLayout(control_layout)
         return control_group
+
+    def create_history_tab(self):
+        """Create the history tab listing past CSV exports with graphs and raw data."""
+        tab = QWidget()
+        layout = QHBoxLayout()
+        tab.setLayout(layout)
+
+        # Left: file list and refresh
+        left_layout = QVBoxLayout()
+        self.history_refresh_btn = QPushButton("Refresh")
+        self.history_refresh_btn.clicked.connect(self.refresh_history_files)
+        left_layout.addWidget(self.history_refresh_btn)
+        self.history_list = QListWidget()
+        self.history_list.currentTextChanged.connect(self.load_history_file)
+        left_layout.addWidget(self.history_list)
+
+        layout.addLayout(left_layout, 1)
+
+        # Right: plots and table
+        right_layout = QVBoxLayout()
+
+        # Plots
+        plots_layout = QVBoxLayout()
+        row1 = QHBoxLayout(); row2 = QHBoxLayout(); row3 = QHBoxLayout()
+        self.h_thrust_plot = self.create_plot("Thrust (grams)", "g", (255, 0, 0))
+        self.h_rpm_plot = self.create_plot("RPM", "RPM", (0, 255, 0))
+        self.h_temp_plot = self.create_plot("Temperature (°C)", "°C", (0, 0, 255))
+        self.h_voltage_plot = self.create_plot("Voltage (V)", "V", (255, 165, 0))
+        self.h_current_plot = self.create_plot("Current (A)", "A", (255, 0, 255))
+        self.h_power_plot = self.create_plot("Power (W)", "W", (0, 0, 0))
+        row1.addWidget(self.h_thrust_plot['widget']); row1.addWidget(self.h_rpm_plot['widget'])
+        row2.addWidget(self.h_temp_plot['widget']); row2.addWidget(self.h_voltage_plot['widget'])
+        row3.addWidget(self.h_current_plot['widget']); row3.addWidget(self.h_power_plot['widget'])
+        plots_layout.addLayout(row1); plots_layout.addLayout(row2); plots_layout.addLayout(row3)
+        right_layout.addLayout(plots_layout, 3)
+
+        # Table
+        self.history_table = QTableWidget()
+        right_layout.addWidget(self.history_table, 2)
+
+        layout.addLayout(right_layout, 3)
+
+        # Initial scan
+        self.refresh_history_files()
+
+        return tab
+
+    def refresh_history_files(self):
+        """Scan for thrust_test_*.csv files and list them sorted by modified time."""
+        pattern = os.path.join(os.getcwd(), "thrust_test_*.csv")
+        files = glob.glob(pattern)
+        files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        self.history_list.clear()
+        for path in files:
+            self.history_list.addItem(path)
+
+    def load_history_file(self, path):
+        """Load a CSV file, parse metadata/header, plot and display data table."""
+        if not path:
+            return
+        times = []
+        thrusts = []
+        rpms = []
+        temps = []
+        volts = []
+        currents = []
+        try:
+            with open(path, 'r', newline='') as f:
+                reader = csv.reader(f)
+                header_found = False
+                for row in reader:
+                    if not row:
+                        continue
+                    if not header_found:
+                        # Look for the data header row
+                        if row[0].strip().lower().startswith('time'):
+                            header = row
+                            header_found = True
+                        # ignore metadata rows gracefully
+                        continue
+                    # Parse data rows
+                    try:
+                        t = float(row[0])
+                        th = float(row[1])
+                        r = float(row[2])
+                        te = float(row[3])
+                        v = float(row[4])
+                        c = float(row[5])
+                    except Exception:
+                        continue
+                    times.append(t); thrusts.append(th); rpms.append(r)
+                    temps.append(te); volts.append(v); currents.append(c)
+        except Exception as e:
+            QMessageBox.critical(self, "History Load Error", str(e))
+            return
+
+        # Update plots
+        time_array = np.array(times) if len(times) > 0 else np.array([])
+        def set_curve(plot, data):
+            if len(time_array) > 0 and len(data) == len(time_array):
+                plot['curve'].setData(time_array, np.array(data))
+                plot['widget'].setXRange(max(0, time_array[0]), time_array[-1], padding=0.02)
+            else:
+                plot['curve'].setData([], [])
+        set_curve(self.h_thrust_plot, thrusts)
+        set_curve(self.h_rpm_plot, rpms)
+        set_curve(self.h_temp_plot, temps)
+        set_curve(self.h_voltage_plot, volts)
+        set_curve(self.h_current_plot, currents)
+        # Power = Voltage * Current
+        powers = []
+        if len(volts) == len(currents):
+            try:
+                powers = (np.array(volts, dtype=float) * np.array(currents, dtype=float)).tolist()
+            except Exception:
+                powers = []
+        set_curve(self.h_power_plot, powers)
+
+        # Update table
+        cols = ['Time (s)', 'Thrust (g)', 'RPM', 'Temperature (°C)', 'Voltage (V)', 'Current (A)']
+        self.history_table.clear()
+        self.history_table.setColumnCount(len(cols))
+        self.history_table.setHorizontalHeaderLabels(cols)
+        self.history_table.setRowCount(len(times))
+        for i in range(len(times)):
+            values = [f"{times[i]:.3f}", f"{thrusts[i]:.3f}", f"{rpms[i]:.1f}", f"{temps[i]:.2f}", f"{volts[i]:.3f}", f"{currents[i]:.3f}"]
+            for j, val in enumerate(values):
+                self.history_table.setItem(i, j, QTableWidgetItem(val))
     
     def create_live_data_panel(self):
         """Create live data display panel."""
@@ -250,11 +424,70 @@ class ThrustStandGUI(QMainWindow):
         
         # Create plot curve
         curve = plot_widget.plot(pen=pg.mkPen(color=color, width=2))
+
+        # Hover crosshair and value label
+        vline = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen((150, 150, 150), style=pg.QtCore.Qt.DotLine))
+        hline = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen((150, 150, 150), style=pg.QtCore.Qt.DotLine))
+        value_label = pg.TextItem(color=(0, 0, 0))
+        # Hover point marker
+        marker = pg.ScatterPlotItem(size=10, brush=pg.mkBrush(color[0], color[1], color[2], 200), pen=pg.mkPen('k', width=1))
+        plot_widget.addItem(vline, ignoreBounds=True)
+        plot_widget.addItem(hline, ignoreBounds=True)
+        plot_widget.addItem(value_label)
+        plot_widget.addItem(marker)
+        vline.hide(); hline.hide(); value_label.hide(); marker.hide()
+
+        def _on_mouse_moved(pos):
+            if not plot_widget.sceneBoundingRect().contains(pos):
+                vline.hide(); hline.hide(); value_label.hide(); marker.hide()
+                return
+            mouse_point = plot_widget.plotItem.vb.mapSceneToView(pos)
+            x = mouse_point.x(); y = mouse_point.y()
+            x_data, y_data = curve.getData()
+            if x_data is None or y_data is None:
+                vline.hide(); hline.hide(); value_label.hide(); marker.hide()
+                return
+            try:
+                import numpy as _np
+                x_data = _np.asarray(x_data, dtype=float)
+                y_data = _np.asarray(y_data, dtype=float)
+            except Exception:
+                vline.hide(); hline.hide(); value_label.hide(); marker.hide()
+                return
+            if len(x_data) == 0 or len(x_data) != len(y_data):
+                vline.hide(); hline.hide(); value_label.hide(); marker.hide()
+                return
+            # Find nearest data point by x
+            idx = _np.searchsorted(x_data, x)
+            cand_indices = [max(0, min(idx, len(x_data) - 1))]
+            if idx > 0:
+                cand_indices.append(idx - 1)
+            # Choose closer by x distance
+            i_best = min(cand_indices, key=lambda i: abs(x_data[i] - x))
+            px = x_data[i_best]; py = y_data[i_best]
+            # Only show if cursor is near the data point (within ~20 px)
+            scene_pt = plot_widget.plotItem.vb.mapViewToScene(QPointF(px, py))
+            dist = (scene_pt - pos).manhattanLength()
+            if dist > 60:
+                vline.hide(); hline.hide(); value_label.hide(); marker.hide()
+                return
+            vline.setPos(px); hline.setPos(py)
+            value_label.setText(f"x={px:.3f}, y={py:.3f}")
+            value_label.setPos(px, py)
+            marker.setData([px], [py])
+            vline.show(); hline.show(); value_label.show(); marker.show()
+
+        hover_proxy = pg.SignalProxy(plot_widget.scene().sigMouseMoved, rateLimit=60, slot=lambda evt: _on_mouse_moved(evt[0]))
         
         return {
             'widget': plot_widget,
             'curve': curve,
-            'visible': True
+            'visible': True,
+            'vline': vline,
+            'hline': hline,
+            'label': value_label,
+            'marker': marker,
+            'hover_proxy': hover_proxy
         }
     
     def refresh_ports(self):
@@ -300,6 +533,14 @@ class ThrustStandGUI(QMainWindow):
         self.temperature_data.clear()
         self.voltage_data.clear()
         self.current_data.clear()
+        self.power_data.clear()
+        self.time_history = []
+        self.thrust_history = []
+        self.rpm_history = []
+        self.temperature_history = []
+        self.voltage_history = []
+        self.current_history = []
+        self.power_history = []
         self.start_time = 0
         
         # Enable/disable buttons
@@ -345,6 +586,7 @@ class ThrustStandGUI(QMainWindow):
         import time
         current_time = time.time() - self.start_time
         self.time_data.append(current_time)
+        self.time_history.append(current_time)
         
         # Store data
         thrust_val = data.get('thrust', 0) or 0
@@ -352,12 +594,20 @@ class ThrustStandGUI(QMainWindow):
         temp_val = data.get('temperature', 0) or 0
         voltage_val = data.get('voltage', 0) or 0
         current_val = data.get('current', 0) or 0
+        power_val = voltage_val * current_val
         
         self.thrust_data.append(thrust_val)
         self.rpm_data.append(rpm_val)
         self.temperature_data.append(temp_val)
         self.voltage_data.append(voltage_val)
         self.current_data.append(current_val)
+        self.power_data.append(power_val)
+        self.thrust_history.append(thrust_val)
+        self.rpm_history.append(rpm_val)
+        self.temperature_history.append(temp_val)
+        self.voltage_history.append(voltage_val)
+        self.current_history.append(current_val)
+        self.power_history.append(power_val)
         
         # Update live value labels
         self.thrust_value_label.setText(f"Thrust: {thrust_val:.2f} g")
@@ -370,19 +620,27 @@ class ThrustStandGUI(QMainWindow):
         time_array = np.array(self.time_data)
         
         if self.plots['thrust']['visible']:
-            self.plots['thrust']['curve'].setData(time_array, np.array(self.thrust_data))
+            thrust_array = np.array(self.thrust_data)
+            self.plots['thrust']['curve'].setData(time_array, thrust_array)
         
         if self.plots['rpm']['visible']:
-            self.plots['rpm']['curve'].setData(time_array, np.array(self.rpm_data))
+            rpm_array = np.array(self.rpm_data)
+            self.plots['rpm']['curve'].setData(time_array, rpm_array)
         
         if self.plots['temperature']['visible']:
-            self.plots['temperature']['curve'].setData(time_array, np.array(self.temperature_data))
+            temp_array = np.array(self.temperature_data)
+            self.plots['temperature']['curve'].setData(time_array, temp_array)
         
         if self.plots['voltage']['visible']:
-            self.plots['voltage']['curve'].setData(time_array, np.array(self.voltage_data))
+            volt_array = np.array(self.voltage_data)
+            self.plots['voltage']['curve'].setData(time_array, volt_array)
         
         if self.plots['current']['visible']:
-            self.plots['current']['curve'].setData(time_array, np.array(self.current_data))
+            curr_array = np.array(self.current_data)
+            self.plots['current']['curve'].setData(time_array, curr_array)
+        if self.plots['power']['visible']:
+            power_array = np.array(self.power_data)
+            self.plots['power']['curve'].setData(time_array, power_array)
         
         # Keep time axis from going negative
         if len(time_array) > 0:
@@ -400,21 +658,22 @@ class ThrustStandGUI(QMainWindow):
     
     def autoscale_plots(self):
         """Auto-scale all visible plots to fit data perfectly."""
-        if len(self.time_data) == 0:
+        if len(self.time_history) == 0:
             QMessageBox.information(self, "No Data", "No data to scale. Start a test first.")
             return
         
-        time_array = np.array(self.time_data)
+        time_array = np.array(self.time_history)
         min_time = max(0, time_array[0])  # Never go negative
         max_time = time_array[-1]
         
         # Auto-scale each visible plot
         data_map = {
-            'thrust': self.thrust_data,
-            'rpm': self.rpm_data,
-            'temperature': self.temperature_data,
-            'voltage': self.voltage_data,
-            'current': self.current_data
+            'thrust': self.thrust_history,
+            'rpm': self.rpm_history,
+            'temperature': self.temperature_history,
+            'voltage': self.voltage_history,
+            'current': self.current_history,
+            'power': self.power_history
         }
         
         for plot_name, plot_info in self.plots.items():
@@ -444,7 +703,7 @@ class ThrustStandGUI(QMainWindow):
     
     def export_to_csv(self):
         """Export collected data to CSV file."""
-        if len(self.time_data) == 0:
+        if len(self.time_history) == 0:
             QMessageBox.warning(self, "No Data", "No data to export. Run a test first.")
             return
         
@@ -467,18 +726,23 @@ class ThrustStandGUI(QMainWindow):
             with open(filename, 'w', newline='') as csvfile:
                 writer = csv.writer(csvfile)
                 
-                # Write header
+                # Metadata rows
+                writer.writerow(['Motor', self.motor_name_input.text() or ''])
+                writer.writerow(['Propeller', self.prop_type_input.text() or ''])
+                writer.writerow(["Exported", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+                writer.writerow([])
+                # Header
                 writer.writerow(['Time (s)', 'Thrust (g)', 'RPM', 'Temperature (°C)', 'Voltage (V)', 'Current (A)'])
                 
                 # Write data rows
-                for i in range(len(self.time_data)):
+                for i in range(len(self.time_history)):
                     writer.writerow([
-                        f"{self.time_data[i]:.3f}",
-                        f"{self.thrust_data[i]:.3f}",
-                        f"{self.rpm_data[i]:.1f}",
-                        f"{self.temperature_data[i]:.2f}",
-                        f"{self.voltage_data[i]:.3f}",
-                        f"{self.current_data[i]:.3f}"
+                        f"{self.time_history[i]:.3f}",
+                        f"{self.thrust_history[i]:.3f}",
+                        f"{self.rpm_history[i]:.1f}",
+                        f"{self.temperature_history[i]:.2f}",
+                        f"{self.voltage_history[i]:.3f}",
+                        f"{self.current_history[i]:.3f}"
                     ])
             
             QMessageBox.information(self, "Export Successful", f"Data exported to:\n{filename}")
