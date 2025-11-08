@@ -53,7 +53,7 @@ void setup() {
 
 void loop() {
   static bool newDataReady = false;
-  const unsigned long serialPrintInterval = 1000; // ms between data prints
+  const unsigned long serialPrintInterval = 100; // ms between data prints
 
   // Update load cell
   if (LoadCell.update()) newDataReady = true;
