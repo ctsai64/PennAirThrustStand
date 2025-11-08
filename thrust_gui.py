@@ -1,3 +1,4 @@
+# thrust_gui.py
 import sys
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QCheckBox, QPushButton, QComboBox, 
@@ -25,13 +26,14 @@ class ThrustStandGUI(QMainWindow):
         
         # Data storage (keep all points; unbounded growth)
         self.max_points = None
-        self.time_data = deque()
+        self.time_data = deque()             # elapsed seconds (numeric) for plotting
         self.thrust_data = deque()
         self.rpm_data = deque()
         self.temperature_data = deque()
         self.voltage_data = deque()
         self.current_data = deque()
         self.power_data = deque()
+        self.timestamp_data = deque()        # human-readable timestamps (HH:MM:SS.sss)
         # Full history arrays (not truncated)
         self.time_history = []
         self.thrust_history = []
@@ -40,6 +42,7 @@ class ThrustStandGUI(QMainWindow):
         self.voltage_history = []
         self.current_history = []
         self.power_history = []
+        self.timestamp_history = []
         self.start_time = 0
         
         # Timer for updating plots
@@ -288,33 +291,59 @@ class ThrustStandGUI(QMainWindow):
             with open(path, 'r', newline='') as f:
                 reader = csv.reader(f)
                 header_found = False
+                header = None
                 for row in reader:
                     if not row:
                         continue
                     if not header_found:
-                        # Look for the data header row
-                        if row[0].strip().lower().startswith('time'):
+                        # Look for the data header row (detect new or old format)
+                        first = row[0].strip().lower()
+                        if first.startswith('timestamp'):
                             header = row
                             header_found = True
-                        # ignore metadata rows gracefully
-                        continue
+                            continue
+                        elif first.startswith('time'):
+                            header = row
+                            header_found = True
+                            continue
+                        else:
+                            # ignore metadata rows
+                            continue
                     # Parse data rows
                     try:
-                        t = float(row[0])
-                        th = float(row[1])
-                        r = float(row[2])
-                        te = float(row[3])
-                        v = float(row[4])
-                        c = float(row[5])
-                        p = None
-                        if len(row) >= 7 and row[6] != "":
-                            p = float(row[6])
+                        # New format: Timestamp, Elapsed (s), Thrust, RPM, Temp, Voltage, Current, Power (optional)
+                        if header and header[0].strip().lower().startswith('timestamp'):
+                            ts_str = row[0].strip()
+                            t = float(row[1]) if len(row) > 1 and row[1] != "" else None
+                            th = float(row[2]) if len(row) > 2 and row[2] != "" else 0.0
+                            r = float(row[3]) if len(row) > 3 and row[3] != "" else 0.0
+                            te = float(row[4]) if len(row) > 4 and row[4] != "" else 0.0
+                            v = float(row[5]) if len(row) > 5 and row[5] != "" else 0.0
+                            c = float(row[6]) if len(row) > 6 and row[6] != "" else 0.0
+                            p = float(row[7]) if len(row) > 7 and row[7] != "" else None
+                        else:
+                            # Old format: Time (s), Thrust, RPM, Temp, Voltage, Current, Power
+                            t = float(row[0])
+                            th = float(row[1]) if len(row) > 1 and row[1] != "" else 0.0
+                            r = float(row[2]) if len(row) > 2 and row[2] != "" else 0.0
+                            te = float(row[3]) if len(row) > 3 and row[3] != "" else 0.0
+                            v = float(row[4]) if len(row) > 4 and row[4] != "" else 0.0
+                            c = float(row[5]) if len(row) > 5 and row[5] != "" else 0.0
+                            p = float(row[6]) if len(row) > 6 and row[6] != "" else None
+                            ts_str = None
                     except Exception:
                         continue
-                    times.append(t); thrusts.append(th); rpms.append(r)
-                    temps.append(te); volts.append(v); currents.append(c)
-                    if p is not None:
-                        powers.append(p)
+
+                    # Only append rows with a valid numeric time for plotting
+                    if t is not None:
+                        times.append(t)
+                        thrusts.append(th)
+                        rpms.append(r)
+                        temps.append(te)
+                        volts.append(v)
+                        currents.append(c)
+                        if p is not None:
+                            powers.append(p)
         except Exception as e:
             QMessageBox.critical(self, "History Load Error", str(e))
             return
@@ -382,6 +411,11 @@ class ThrustStandGUI(QMainWindow):
             border-radius: 5px;
             margin: 5px;
         """
+
+        # Timestamp label (real time)
+        self.timestamp_label = QLabel("Time: ---")
+        self.timestamp_label.setStyleSheet("font-size: 14pt; font-weight: bold; padding: 6px; margin: 4px;")
+        data_layout.addWidget(self.timestamp_label)
         
         # Thrust
         self.thrust_value_label = QLabel("Thrust: --- g")
@@ -542,6 +576,7 @@ class ThrustStandGUI(QMainWindow):
         self.voltage_data.clear()
         self.current_data.clear()
         self.power_data.clear()
+        self.timestamp_data.clear()
         self.time_history = []
         self.thrust_history = []
         self.rpm_history = []
@@ -549,6 +584,7 @@ class ThrustStandGUI(QMainWindow):
         self.voltage_history = []
         self.current_history = []
         self.power_history = []
+        self.timestamp_history = []
         self.start_time = 0
         
         # Enable/disable buttons
@@ -572,7 +608,7 @@ class ThrustStandGUI(QMainWindow):
         self.connect_btn.setEnabled(True)
         
         # Enable export if we have data
-        if len(self.time_data) > 0:
+        if len(self.time_history) > 0:
             self.export_btn.setEnabled(True)
         
         if self.serial_reader.is_connected:
@@ -586,15 +622,20 @@ class ThrustStandGUI(QMainWindow):
         if data is None:
             return
         
-        # Calculate time
+        # Calculate elapsed seconds (numeric)
         if self.start_time == 0:
-            import time
-            self.start_time = time.time()
+            import time as _tt
+            self.start_time = _tt.time()
         
-        import time
-        current_time = time.time() - self.start_time
-        self.time_data.append(current_time)
-        self.time_history.append(current_time)
+        import time as _tt
+        elapsed = _tt.time() - self.start_time
+        self.time_data.append(elapsed)
+        self.time_history.append(elapsed)
+        
+        # Timestamp (human-readable) from SerialReader
+        timestamp_str = data.get('timestamp') or datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        self.timestamp_data.append(timestamp_str)
+        self.timestamp_history.append(timestamp_str)
         
         # Store data
         thrust_val = data.get('thrust', 0) or 0
@@ -617,14 +658,15 @@ class ThrustStandGUI(QMainWindow):
         self.current_history.append(current_val)
         self.power_history.append(power_val)
         
-        # Update live value labels
+        # Update live value labels (and timestamp at top)
+        self.timestamp_label.setText(f"Time: {timestamp_str}")
         self.thrust_value_label.setText(f"Thrust: {thrust_val:.2f} g")
         self.rpm_value_label.setText(f"RPM: {rpm_val:.1f} RPM")
         self.temp_value_label.setText(f"Temp: {temp_val:.1f} °C")
         self.voltage_value_label.setText(f"Voltage: {voltage_val:.2f} V")
         self.current_value_label.setText(f"Current: {current_val:.3f} A")
         
-        # Update plots
+        # Update plots (use elapsed numeric seconds for x axis)
         time_array = np.array(self.time_data)
         
         if self.plots['thrust']['visible']:
@@ -715,9 +757,9 @@ class ThrustStandGUI(QMainWindow):
             QMessageBox.warning(self, "No Data", "No data to export. Run a test first.")
             return
         
-        # Generate default filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_filename = f"thrust_test_{timestamp}.csv"
+        # Generate default filename with date only (YYYY-MM-DD)
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        default_filename = f"thrust_test_{date_str}.csv"
         
         # Open file dialog
         filename, _ = QFileDialog.getSaveFileName(
@@ -739,12 +781,13 @@ class ThrustStandGUI(QMainWindow):
                 writer.writerow(['Propeller', self.prop_type_input.text() or ''])
                 writer.writerow(["Exported", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
                 writer.writerow([])
-                # Header
-                writer.writerow(['Time (s)', 'Thrust (g)', 'RPM', 'Temperature (°C)', 'Voltage (V)', 'Current (A)', 'Power (W)'])
+                # Header — Timestamp (HH:MM:SS.sss), Elapsed (s), Thrust, RPM, Temp, Voltage, Current, Power
+                writer.writerow(['Timestamp (HH:MM:SS.sss)', 'Elapsed (s)', 'Thrust (g)', 'RPM', 'Temperature (°C)', 'Voltage (V)', 'Current (A)', 'Power (W)'])
                 
                 # Write data rows
                 for i in range(len(self.time_history)):
                     writer.writerow([
+                        self.timestamp_history[i] if i < len(self.timestamp_history) else '',
                         f"{self.time_history[i]:.3f}",
                         f"{self.thrust_history[i]:.3f}",
                         f"{self.rpm_history[i]:.1f}",
