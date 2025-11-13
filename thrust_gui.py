@@ -4,6 +4,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QCheckBox, QPushButton, QComboBox, 
                              QLabel, QGroupBox, QMessageBox, QFileDialog, QLineEdit, 
                              QTabWidget, QListWidget, QTableWidget, QTableWidgetItem)
+from PyQt5.QtGui import QPalette, QColor
 import os
 import glob
 from PyQt5.QtCore import QTimer, QPointF
@@ -13,6 +14,10 @@ import numpy as np
 import csv
 from datetime import datetime
 from serial_reader import SerialReader
+try:
+    import qdarktheme  # optional modern theming
+except Exception:
+    qdarktheme = None
 
 
 class ThrustStandGUI(QMainWindow):
@@ -44,6 +49,8 @@ class ThrustStandGUI(QMainWindow):
         self.power_history = []
         self.timestamp_history = []
         self.start_time = 0
+        # Live plot decimation (display-only): seconds per displayed point
+        self.display_step_s = 0.5
         
         # Timer for updating plots
         self.timer = QTimer()
@@ -51,6 +58,8 @@ class ThrustStandGUI(QMainWindow):
         
         # Setup UI
         self.init_ui()
+        # Theme state
+        self.is_dark_mode = False
         
     def init_ui(self):
         # Main widget and layout
@@ -173,9 +182,13 @@ class ThrustStandGUI(QMainWindow):
         
         self.autoscale_btn = QPushButton("Auto-Scale All")
         self.autoscale_btn.clicked.connect(self.autoscale_plots)
-        self.autoscale_btn.setMinimumHeight(44)
-        self.autoscale_btn.setStyleSheet("font-size: 14pt; padding: 8px 16px;")
+        # Match default sizing of other buttons (no custom size/style)
         button_layout.addWidget(self.autoscale_btn)
+
+        # Theme toggle
+        self.theme_toggle = QCheckBox("Dark Mode")
+        self.theme_toggle.stateChanged.connect(self.toggle_theme)
+        button_layout.addWidget(self.theme_toggle)
         
         control_layout.addLayout(button_layout)
 
@@ -220,6 +233,74 @@ class ThrustStandGUI(QMainWindow):
         
         control_group.setLayout(control_layout)
         return control_group
+
+    def apply_light_palette(self):
+        app = QApplication.instance()
+        app.setStyle("Fusion")
+        palette = QPalette()
+        app.setPalette(palette)
+        app.setStyleSheet("")
+
+    def apply_dark_palette(self):
+        app = QApplication.instance()
+        app.setStyle("Fusion")
+        palette = QPalette()
+        palette.setColor(QPalette.Window, QColor(53, 53, 53))
+        palette.setColor(QPalette.WindowText, QColor(220, 220, 220))
+        palette.setColor(QPalette.Base, QColor(35, 35, 35))
+        palette.setColor(QPalette.AlternateBase, QColor(53, 53, 53))
+        palette.setColor(QPalette.ToolTipBase, QColor(220, 220, 220))
+        palette.setColor(QPalette.ToolTipText, QColor(220, 220, 220))
+        palette.setColor(QPalette.Text, QColor(220, 220, 220))
+        palette.setColor(QPalette.Button, QColor(53, 53, 53))
+        palette.setColor(QPalette.ButtonText, QColor(220, 220, 220))
+        palette.setColor(QPalette.BrightText, QColor(255, 0, 0))
+        palette.setColor(QPalette.Highlight, QColor(142, 45, 197).lighter())
+        palette.setColor(QPalette.HighlightedText, QColor(0, 0, 0))
+        app.setPalette(palette)
+        app.setStyleSheet("")
+
+    def toggle_theme(self, state):
+        self.is_dark_mode = state == 2
+        app = QApplication.instance()
+        if self.is_dark_mode:
+            if qdarktheme is not None:
+                app.setStyleSheet(qdarktheme.load_stylesheet("dark"))
+            else:
+                self.apply_dark_palette()
+        else:
+            if qdarktheme is not None:
+                app.setStyleSheet(qdarktheme.load_stylesheet("light"))
+            else:
+                self.apply_light_palette()
+        # Update plot widgets to dark/light backgrounds while keeping crisp text
+        def _apply_plot_theme(plot_dict):
+            is_dark = self.is_dark_mode
+            bg = (20, 20, 20) if is_dark else 'w'
+            # Use explicit RGB tuples for text colors to ensure they override stylesheet
+            fg = (255, 255, 255) if is_dark else (0, 0, 0)
+            w = plot_dict['widget']
+            w.setBackground(bg)
+            # Update title and axis labels using stored values with explicit colors
+            title_text = plot_dict.get('title', '')
+            y_label_text = plot_dict.get('y_label', '')
+            w.setTitle(title_text, color=fg, size='12pt')
+            w.setLabel('left', y_label_text, color=fg)
+            w.setLabel('bottom', 'Time (s)', color=fg)
+            # Force update of axis labels
+            w.getAxis('left').setLabel(y_label_text, color=fg)
+            w.getAxis('bottom').setLabel('Time (s)', color=fg)
+            # Update hover label color to match theme
+            if 'label' in plot_dict:
+                label_color = (255, 255, 255) if is_dark else (0, 0, 0)
+                plot_dict['label'].setColor(label_color)
+            # Force repaint
+            w.update()
+        for p in self.plots.values():
+            _apply_plot_theme(p)
+        # History plots too
+        for p in [self.h_thrust_plot, self.h_rpm_plot, self.h_temp_plot, self.h_voltage_plot, self.h_current_plot, self.h_power_plot]:
+            _apply_plot_theme(p)
 
     def create_history_tab(self):
         """Create the history tab listing past CSV exports with graphs and raw data."""
@@ -451,10 +532,15 @@ class ThrustStandGUI(QMainWindow):
     def create_plot(self, title, y_label, color):
         """Create a plot widget."""
         plot_widget = pg.PlotWidget()
-        plot_widget.setBackground('w')
-        plot_widget.setTitle(title, color='k', size='12pt')
-        plot_widget.setLabel('left', y_label, color='k')
-        plot_widget.setLabel('bottom', 'Time (s)', color='k')
+        # Theme-aware plot styling: dark background for graphs in dark mode, keep text non-grey (white on dark)
+        is_dark = getattr(self, 'is_dark_mode', False)
+        bg = (20, 20, 20) if is_dark else 'w'
+        # Use explicit RGB tuples for text colors
+        fg = (255, 255, 255) if is_dark else (0, 0, 0)
+        plot_widget.setBackground(bg)
+        plot_widget.setTitle(title, color=fg, size='12pt')
+        plot_widget.setLabel('left', y_label, color=fg)
+        plot_widget.setLabel('bottom', 'Time (s)', color=fg)
         plot_widget.showGrid(x=True, y=True, alpha=0.3)
         
         # Set minimum size for more square appearance
@@ -463,6 +549,14 @@ class ThrustStandGUI(QMainWindow):
         
         # Set time axis to start at 0
         plot_widget.setXRange(0, 10, padding=0)
+        
+        # Enable mouse interactions for panning and zooming
+        plot_widget.setMouseEnabled(x=True, y=True)  # Enable panning with left mouse drag
+        vb = plot_widget.getViewBox()
+        vb.setMouseMode(pg.ViewBox.PanMode)  # Default to pan mode (left drag to pan)
+        # Enable right-click drag to zoom region
+        vb.setMenuEnabled(True)  # Enable right-click menu (includes zoom options)
+        # Mouse wheel zoom is enabled by default in PyQtGraph
         
         # Create plot curve
         curve = plot_widget.plot(pen=pg.mkPen(color=color, width=2))
@@ -529,7 +623,9 @@ class ThrustStandGUI(QMainWindow):
             'hline': hline,
             'label': value_label,
             'marker': marker,
-            'hover_proxy': hover_proxy
+            'hover_proxy': hover_proxy,
+            'title': title,
+            'y_label': y_label
         }
     
     def refresh_ports(self):
@@ -666,31 +762,53 @@ class ThrustStandGUI(QMainWindow):
         self.voltage_value_label.setText(f"Voltage: {voltage_val:.2f} V")
         self.current_value_label.setText(f"Current: {current_val:.3f} A")
         
-        # Update plots (use elapsed numeric seconds for x axis)
+        # Update plots (display-only downsampling to reduce visual density)
         time_array = np.array(self.time_data)
+        def decimate_by_time(x, y, step_s):
+            if len(x) == 0:
+                return x, y
+            dx = []
+            dy = []
+            last_t = None
+            for xi, yi in zip(x, y):
+                if last_t is None or (xi - last_t) >= step_s:
+                    dx.append(xi)
+                    dy.append(yi)
+                    last_t = xi
+                else:
+                    # replace last sample in current bin with the latest value
+                    dx[-1] = xi
+                    dy[-1] = yi
+            return np.array(dx), np.array(dy)
         
         if self.plots['thrust']['visible']:
             thrust_array = np.array(self.thrust_data)
-            self.plots['thrust']['curve'].setData(time_array, thrust_array)
+            dx, dy = decimate_by_time(time_array, thrust_array, self.display_step_s)
+            self.plots['thrust']['curve'].setData(dx, dy)
         
         if self.plots['rpm']['visible']:
             rpm_array = np.array(self.rpm_data)
-            self.plots['rpm']['curve'].setData(time_array, rpm_array)
+            dx, dy = decimate_by_time(time_array, rpm_array, self.display_step_s)
+            self.plots['rpm']['curve'].setData(dx, dy)
         
         if self.plots['temperature']['visible']:
             temp_array = np.array(self.temperature_data)
-            self.plots['temperature']['curve'].setData(time_array, temp_array)
+            dx, dy = decimate_by_time(time_array, temp_array, self.display_step_s)
+            self.plots['temperature']['curve'].setData(dx, dy)
         
         if self.plots['voltage']['visible']:
             volt_array = np.array(self.voltage_data)
-            self.plots['voltage']['curve'].setData(time_array, volt_array)
+            dx, dy = decimate_by_time(time_array, volt_array, self.display_step_s)
+            self.plots['voltage']['curve'].setData(dx, dy)
         
         if self.plots['current']['visible']:
             curr_array = np.array(self.current_data)
-            self.plots['current']['curve'].setData(time_array, curr_array)
+            dx, dy = decimate_by_time(time_array, curr_array, self.display_step_s)
+            self.plots['current']['curve'].setData(dx, dy)
         if self.plots['power']['visible']:
             power_array = np.array(self.power_data)
-            self.plots['power']['curve'].setData(time_array, power_array)
+            dx, dy = decimate_by_time(time_array, power_array, self.display_step_s)
+            self.plots['power']['curve'].setData(dx, dy)
         
         # Keep time axis from going negative
         if len(time_array) > 0:

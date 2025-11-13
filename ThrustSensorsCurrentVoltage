@@ -13,6 +13,16 @@ const int voltageSensorPin = A2;  // 0–25V sensor
 const int currentSensorPin = A0;
 const int zeroButton = 7;
 
+// ----- ESC CONTROL -----
+const int escPin = 9;  // PWM pin for ESC control (change if needed)
+// ESC PWM range: typically 1000-2000 microseconds (1000 = stop, 2000 = full throttle)
+// Some ESCs use 1100-1900 or different ranges - adjust if needed
+const int ESC_MIN = 1000;   // Minimum PWM (stop/zero throttle)
+const int ESC_MAX = 2000;    // Maximum PWM (full throttle)
+const int ESC_ARM = 1000;    // Arm signal (some ESCs need 1000, others 1100)
+int escThrottle = ESC_MIN;   // Current throttle value
+bool escArmed = false;
+
 // Set this for your ACS712 version:
 // 5A = 185 mV/A
 // 20A = 100 mV/A
@@ -37,6 +47,72 @@ HX711_ADC LoadCell(HX711_dout, HX711_sck);
 
 void countPulse() {
   pulseCount++;
+}
+
+// ----- ESC FUNCTIONS -----
+// ESP32 uses ledc, standard Arduino uses Servo library
+#ifdef ESP32
+  void setupESC() {
+    // Initialize PWM for ESP32 using ledc
+    ledcSetup(0, 50, 16);  // Channel 0, 50Hz (standard ESC frequency), 16-bit resolution
+    ledcAttachPin(escPin, 0);
+    
+    // Arm ESC (send minimum signal for 2 seconds)
+    Serial.println("Arming ESC...");
+    setESCPWM(ESC_ARM);
+    delay(2000);
+    escArmed = true;
+    Serial.println("ESC armed!");
+  }
+
+  void setESCPWM(int microseconds) {
+    // Convert microseconds to duty cycle for ESP32
+    // 50Hz = 20000 microseconds period
+    // Duty cycle = (microseconds / 20000) * 65535
+    int duty = map(microseconds, 1000, 2000, 3277, 6553);  // Map 1000-2000us to 16-bit range
+    ledcWrite(0, duty);
+    escThrottle = microseconds;
+  }
+#else
+  // Standard Arduino - use Servo library
+  #include <Servo.h>
+  Servo esc;
+  
+  void setupESC() {
+    esc.attach(escPin);
+    
+    // Arm ESC (send minimum signal for 2 seconds)
+    Serial.println("Arming ESC...");
+    setESCPWM(ESC_ARM);
+    delay(2000);
+    escArmed = true;
+    Serial.println("ESC armed!");
+  }
+
+  void setESCPWM(int microseconds) {
+    esc.writeMicroseconds(microseconds);
+    escThrottle = microseconds;
+  }
+#endif
+
+void setThrottlePercent(float percent) {
+  // Clamp to 0-100%
+  if (percent < 0) percent = 0;
+  if (percent > 100) percent = 100;
+  
+  // Convert percentage to PWM microseconds
+  int pwm = map((int)percent, 0, 100, ESC_MIN, ESC_MAX);
+  setESCPWM(pwm);
+  Serial.print("Throttle set to: ");
+  Serial.print(percent);
+  Serial.print("% (");
+  Serial.print(pwm);
+  Serial.println(" us)");
+}
+
+void stopMotor() {
+  setESCPWM(ESC_MIN);
+  Serial.println("Motor stopped");
 }
 
 // ----- SETUP -----
@@ -66,7 +142,20 @@ void setup() {
   Serial.println("Startup complete");
 
   while (!LoadCell.update());
+  
+  // Arm ESC
+  setupESC();
+  
+  // Start calibration
   calibrate();
+  
+  // Print available commands
+  Serial.println("\n=== ESC Control Commands ===");
+  Serial.println("s<number>  - Set throttle 0-100% (e.g., s50 for 50%)");
+  Serial.println("m<number>  - Set PWM microseconds (e.g., m1500 for 1500us)");
+  Serial.println("a         - Re-arm ESC");
+  Serial.println("stop      - Stop motor (0% throttle)");
+  Serial.println("=============================\n");
 }
 
 // ----- LOOP -----
@@ -122,15 +211,68 @@ void loop() {
     Serial.print("Current: ");
     Serial.print(current, 3);
     Serial.println(" A");
+    
+    // ESC Status
+    Serial.print("ESC Throttle: ");
+    Serial.print(map(escThrottle, ESC_MIN, ESC_MAX, 0, 100));
+    Serial.print("% (");
+    Serial.print(escThrottle);
+    Serial.println(" us)");
   }
 
   // Serial Commands
   if (Serial.available()) {
-    char c = Serial.read();
-    if (c == 't') LoadCell.tareNoDelay();
-    else if (c == 'r') calibrate();
-    else if (c == 'c') changeCalFactor();
-    else if (c == 'z') calibrateZero();  // <-- current sensor zeroing
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    cmd.toLowerCase();
+    
+    // Single character commands
+    if (cmd.length() == 1) {
+      char c = cmd[0];
+      if (c == 't') LoadCell.tareNoDelay();
+      else if (c == 'r') calibrate();
+      else if (c == 'c') changeCalFactor();
+      else if (c == 'z') calibrateZero();
+      else if (c == 'a') {
+        setupESC();
+        Serial.println("ESC re-armed");
+      }
+    }
+    // ESC throttle commands
+    else if (cmd.startsWith("s")) {
+      // Set throttle percentage: s50 for 50%
+      float percent = cmd.substring(1).toFloat();
+      if (!escArmed) {
+        Serial.println("ERROR: ESC not armed! Send 'a' to arm first.");
+      } else {
+        setThrottlePercent(percent);
+      }
+    }
+    else if (cmd.startsWith("m")) {
+      // Set PWM microseconds: m1500 for 1500 microseconds
+      int microseconds = cmd.substring(1).toInt();
+      if (microseconds < ESC_MIN || microseconds > ESC_MAX) {
+        Serial.print("ERROR: PWM must be between ");
+        Serial.print(ESC_MIN);
+        Serial.print(" and ");
+        Serial.println(ESC_MAX);
+      } else if (!escArmed) {
+        Serial.println("ERROR: ESC not armed! Send 'a' to arm first.");
+      } else {
+        setESCPWM(microseconds);
+        Serial.print("PWM set to: ");
+        Serial.print(microseconds);
+        Serial.println(" microseconds");
+      }
+    }
+    else if (cmd == "stop" || cmd == "0") {
+      stopMotor();
+    }
+    else if (cmd.length() > 0) {
+      Serial.print("Unknown command: ");
+      Serial.println(cmd);
+      Serial.println("Type 's<number>' for throttle %, 'm<number>' for PWM, 'a' to arm, 'stop' to stop");
+    }
   }
 
   // Button-press zeroing
