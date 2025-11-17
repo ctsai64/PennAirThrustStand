@@ -101,8 +101,8 @@ void loop() {
     throttlePercent += 5;
     if (throttlePercent > 100) throttlePercent = 100;
     updateESC();
-    Serial.print("[Ramp-Up] Throttle increased to ");
-    Serial.print(throttlePercent);
+    Serial.print("Throttle (%): ");
+    Serial.println(throttlePercent);
     Serial.println("%");
     lastThrottleChange = millis();
 
@@ -143,46 +143,82 @@ void loop() {
 void countPulse() { pulseCount++; }
 
 void handleSerialInput() {
-  String input = Serial.readStringUntil('\n');
-  input.trim();
 
-  if (input.equalsIgnoreCase("s")) {
-    throttlePercent = 0;
-    updateESC();
-    motorRunning = false;
-    inProcedure = false;
-    rampingDown = false;
-    Serial.println("Motor stopped.");
-    Serial.println("Enter power % (0–100), 'procedure', or 's' to stop:");
-    return;
-  }
+  
+  // Read characters IMMEDIATELY as they arrive (like calibrate)
+  if (Serial.available() > 0) {
+    char c = Serial.read();
 
-  if (input.equalsIgnoreCase("procedure")) {
-    Serial.println("Starting 5-second interval ramp procedure...");
-    throttlePercent = 0;
-    updateESC();
-    motorRunning = true;
-    inProcedure = true;
-    rampingDown = false;
-    lastThrottleChange = millis();
-    Serial.println("Throttle at 0%, increasing by 5% every 5 seconds until 100%.");
-    return;
-  }
+    // --- Stop motor ---
+    if (c == 's' || c == 'S') {
+      throttlePercent = 0;
+      updateESC();
+      motorRunning = false;
+      inProcedure = false;
+      rampingDown = false;
 
-  float val = input.toFloat();
-  if (val >= 0 && val <= 100) {
-    throttlePercent = val;
-    motorRunning = (val > 0);
-    inProcedure = false;
-    rampingDown = false;
-    updateESC();
-    Serial.print("[Static] Throttle set to ");
-    Serial.print(throttlePercent);
-    Serial.println("%");
-  } else {
-    Serial.println("Invalid input. Enter 0–100, 'procedure', or 's' to stop.");
+      Serial.println("Motor stopped.");
+      Serial.println("Enter power % (0–100), 'procedure', 'c', or 's':");
+      return;
+    }
+
+    // --- Start automatic throttle procedure ---
+    if (c == 'p' || c == 'P') {   // single-char like calibrate 't'
+      Serial.println("Starting 5-second interval ramp procedure...");
+      throttlePercent = 0;
+      updateESC();
+      motorRunning = true;
+      inProcedure = true;
+      rampingDown = false;
+      lastThrottleChange = millis();
+
+      Serial.println("Throttle at 0%, increasing by 5% every 5 seconds until 100%.");
+      return;
+    }
+
+    // --- Calibration factor change ---
+    if (c == 'c' || c == 'C') {
+      changeCalFactor();
+      return;
+    }
+
+    // --- If char is a digit, begin reading a number like calibrate() ---
+    if (isDigit(c)) {
+      String buffer = "";
+      buffer += c;
+
+      // read remaining digits or decimal point if they come
+      delay(5);
+      while (Serial.available() > 0) {
+        char d = Serial.read();
+        if (isDigit(d) || d == '.') {
+          buffer += d;
+        } else {
+          break;
+        }
+      }
+
+      float val = buffer.toFloat();
+      if (val >= 0 && val <= 100) {
+        throttlePercent = val;
+        motorRunning = (val > 0);
+        inProcedure = false;
+        rampingDown = false;
+        updateESC();
+
+        Serial.print("Throttle (%): ");
+        Serial.println(throttlePercent);
+      } else {
+        Serial.println("Invalid value. Must be 0–100.");
+      }
+      return;
+    }
+
+    // Unknown input
+    Serial.println("Invalid input. Enter 0–100, 'p', 'c', or 's'.");
   }
 }
+
 
 void updateESC() {
   int signal = map(throttlePercent, 0, 100, 1000, 2000);
