@@ -38,6 +38,7 @@ class ThrustStandGUI(QMainWindow):
         self.voltage_data = deque()
         self.current_data = deque()
         self.power_data = deque()
+        self.throttle_data = deque()
         self.timestamp_data = deque()        # human-readable timestamps (HH:MM:SS.sss)
         # Full history arrays (not truncated)
         self.time_history = []
@@ -47,10 +48,13 @@ class ThrustStandGUI(QMainWindow):
         self.voltage_history = []
         self.current_history = []
         self.power_history = []
+        self.throttle_history = []
         self.timestamp_history = []
         self.start_time = 0
         # Live plot decimation (display-only): seconds per displayed point
         self.display_step_s = 0.5
+        # X-axis domain: True = throttle, False = time
+        self.use_throttle_domain = False
         
         # Timer for updating plots
         self.timer = QTimer()
@@ -93,6 +97,8 @@ class ThrustStandGUI(QMainWindow):
         row2_layout = QHBoxLayout()
         # Row 3: Current and Power
         row3_layout = QHBoxLayout()
+        # Row 4: Throttle (always vs time)
+        row4_layout = QHBoxLayout()
         
         # Create individual plots with square aspect
         self.thrust_plot = self.create_plot("Thrust (grams)", "g", (255, 0, 0))
@@ -101,8 +107,9 @@ class ThrustStandGUI(QMainWindow):
         self.voltage_plot = self.create_plot("Voltage (V)", "V", (255, 165, 0))
         self.current_plot = self.create_plot("Current (A)", "A", (255, 0, 255))
         self.power_plot = self.create_plot("Power (W)", "W", (0, 0, 0))
+        self.throttle_plot = self.create_plot("Throttle (%)", "%", (100, 150, 200))
         
-        # Arrange plots in grid (2x2 + 1)
+        # Arrange plots in grid (2x3 + throttle)
         row1_layout.addWidget(self.thrust_plot['widget'])
         row1_layout.addWidget(self.rpm_plot['widget'])
         
@@ -112,9 +119,13 @@ class ThrustStandGUI(QMainWindow):
         row3_layout.addWidget(self.current_plot['widget'])
         row3_layout.addWidget(self.power_plot['widget'])
         
+        # Throttle plot spans full width
+        row4_layout.addWidget(self.throttle_plot['widget'])
+        
         plot_layout.addLayout(row1_layout)
         plot_layout.addLayout(row2_layout)
         plot_layout.addLayout(row3_layout)
+        plot_layout.addLayout(row4_layout)
         
         content_layout.addLayout(plot_layout, 3)  # 75% width
         
@@ -137,7 +148,8 @@ class ThrustStandGUI(QMainWindow):
             'temperature': self.temp_plot,
             'voltage': self.voltage_plot,
             'current': self.current_plot,
-            'power': self.power_plot
+            'power': self.power_plot,
+            'throttle': self.throttle_plot
         }
         
     def create_control_panel(self):
@@ -175,6 +187,16 @@ class ThrustStandGUI(QMainWindow):
         self.stop_btn.setEnabled(False)
         button_layout.addWidget(self.stop_btn)
         
+        self.stop_motor_btn = QPushButton("Stop Motor")
+        self.stop_motor_btn.clicked.connect(self.stop_motor)
+        self.stop_motor_btn.setEnabled(False)
+        button_layout.addWidget(self.stop_motor_btn)
+        
+        self.procedure_btn = QPushButton("Run Auto Procedure")
+        self.procedure_btn.clicked.connect(self.run_procedure)
+        self.procedure_btn.setEnabled(False)
+        button_layout.addWidget(self.procedure_btn)
+        
         self.export_btn = QPushButton("Export to CSV")
         self.export_btn.clicked.connect(self.export_to_csv)
         self.export_btn.setEnabled(False)
@@ -189,6 +211,11 @@ class ThrustStandGUI(QMainWindow):
         self.theme_toggle = QCheckBox("Dark Mode")
         self.theme_toggle.stateChanged.connect(self.toggle_theme)
         button_layout.addWidget(self.theme_toggle)
+        
+        # X-axis domain toggle
+        self.domain_toggle = QCheckBox("X-Axis: Throttle")
+        self.domain_toggle.stateChanged.connect(self.toggle_domain)
+        button_layout.addWidget(self.domain_toggle)
         
         control_layout.addLayout(button_layout)
 
@@ -212,8 +239,8 @@ class ThrustStandGUI(QMainWindow):
         checkbox_layout.addWidget(checkbox_label)
         
         self.checkboxes = {}
-        measurements = ['thrust', 'rpm', 'temperature', 'voltage', 'current', 'power']
-        labels = ['Thrust (g)', 'RPM', 'Temperature (°C)', 'Voltage (V)', 'Current (A)', 'Power (W)']
+        measurements = ['thrust', 'rpm', 'temperature', 'voltage', 'current', 'power', 'throttle']
+        labels = ['Thrust (g)', 'RPM', 'Temperature (°C)', 'Voltage (V)', 'Current (A)', 'Power (W)', 'Throttle (%)']
         
         for measure, label in zip(measurements, labels):
             cb = QCheckBox(label)
@@ -289,7 +316,13 @@ class ThrustStandGUI(QMainWindow):
             w.setLabel('bottom', 'Time (s)', color=fg)
             # Force update of axis labels
             w.getAxis('left').setLabel(y_label_text, color=fg)
-            w.getAxis('bottom').setLabel('Time (s)', color=fg)
+            # X-axis label depends on domain mode
+            x_label = 'Throttle (%)' if self.is_dark_mode and getattr(self, 'use_throttle_domain', False) else 'Time (s)'
+            if hasattr(self, 'use_throttle_domain') and self.use_throttle_domain:
+                x_label = 'Throttle (%)'
+            else:
+                x_label = 'Time (s)'
+            w.getAxis('bottom').setLabel(x_label, color=fg)
             # Update hover label color to match theme
             if 'label' in plot_dict:
                 label_color = (255, 255, 255) if is_dark else (0, 0, 0)
@@ -299,7 +332,7 @@ class ThrustStandGUI(QMainWindow):
         for p in self.plots.values():
             _apply_plot_theme(p)
         # History plots too
-        for p in [self.h_thrust_plot, self.h_rpm_plot, self.h_temp_plot, self.h_voltage_plot, self.h_current_plot, self.h_power_plot]:
+        for p in [self.h_thrust_plot, self.h_rpm_plot, self.h_temp_plot, self.h_voltage_plot, self.h_current_plot, self.h_power_plot, self.h_throttle_plot]:
             _apply_plot_theme(p)
 
     def create_history_tab(self):
@@ -324,17 +357,19 @@ class ThrustStandGUI(QMainWindow):
 
         # Plots
         plots_layout = QVBoxLayout()
-        row1 = QHBoxLayout(); row2 = QHBoxLayout(); row3 = QHBoxLayout()
+        row1 = QHBoxLayout(); row2 = QHBoxLayout(); row3 = QHBoxLayout(); row4 = QHBoxLayout()
         self.h_thrust_plot = self.create_plot("Thrust (grams)", "g", (255, 0, 0))
         self.h_rpm_plot = self.create_plot("RPM", "RPM", (0, 255, 0))
         self.h_temp_plot = self.create_plot("Temperature (°C)", "°C", (0, 0, 255))
         self.h_voltage_plot = self.create_plot("Voltage (V)", "V", (255, 165, 0))
         self.h_current_plot = self.create_plot("Current (A)", "A", (255, 0, 255))
         self.h_power_plot = self.create_plot("Power (W)", "W", (0, 0, 0))
+        self.h_throttle_plot = self.create_plot("Throttle (%)", "%", (100, 150, 200))
         row1.addWidget(self.h_thrust_plot['widget']); row1.addWidget(self.h_rpm_plot['widget'])
         row2.addWidget(self.h_temp_plot['widget']); row2.addWidget(self.h_voltage_plot['widget'])
         row3.addWidget(self.h_current_plot['widget']); row3.addWidget(self.h_power_plot['widget'])
-        plots_layout.addLayout(row1); plots_layout.addLayout(row2); plots_layout.addLayout(row3)
+        row4.addWidget(self.h_throttle_plot['widget'])  # Throttle spans full width
+        plots_layout.addLayout(row1); plots_layout.addLayout(row2); plots_layout.addLayout(row3); plots_layout.addLayout(row4)
         right_layout.addLayout(plots_layout, 3)
 
         # Table
@@ -368,11 +403,13 @@ class ThrustStandGUI(QMainWindow):
         volts = []
         currents = []
         powers = []
+        throttles = []
         try:
             with open(path, 'r', newline='') as f:
                 reader = csv.reader(f)
                 header_found = False
                 header = None
+                throttle_idx = None
                 for row in reader:
                     if not row:
                         continue
@@ -382,17 +419,27 @@ class ThrustStandGUI(QMainWindow):
                         if first.startswith('timestamp'):
                             header = row
                             header_found = True
+                            # Find throttle column index if it exists
+                            for i, h in enumerate(header):
+                                if 'throttle' in h.lower():
+                                    throttle_idx = i
+                                    break
                             continue
                         elif first.startswith('time'):
                             header = row
                             header_found = True
+                            # Find throttle column index if it exists
+                            for i, h in enumerate(header):
+                                if 'throttle' in h.lower():
+                                    throttle_idx = i
+                                    break
                             continue
                         else:
                             # ignore metadata rows
                             continue
                     # Parse data rows
                     try:
-                        # New format: Timestamp, Elapsed (s), Thrust, RPM, Temp, Voltage, Current, Power (optional)
+                        # New format: Timestamp, Elapsed (s), Thrust, RPM, Temp, Voltage, Current, Power, Throttle (optional)
                         if header and header[0].strip().lower().startswith('timestamp'):
                             ts_str = row[0].strip()
                             t = float(row[1]) if len(row) > 1 and row[1] != "" else None
@@ -402,8 +449,15 @@ class ThrustStandGUI(QMainWindow):
                             v = float(row[5]) if len(row) > 5 and row[5] != "" else 0.0
                             c = float(row[6]) if len(row) > 6 and row[6] != "" else 0.0
                             p = float(row[7]) if len(row) > 7 and row[7] != "" else None
+                            # Extract throttle: try column 8 first, or use throttle_idx if found
+                            if throttle_idx is not None and len(row) > throttle_idx:
+                                thr = float(row[throttle_idx]) if row[throttle_idx] != "" else 0.0
+                            elif len(row) > 8 and row[8] != "":
+                                thr = float(row[8])
+                            else:
+                                thr = 0.0
                         else:
-                            # Old format: Time (s), Thrust, RPM, Temp, Voltage, Current, Power
+                            # Old format: Time (s), Thrust, RPM, Temp, Voltage, Current, Power, Throttle (optional)
                             t = float(row[0])
                             th = float(row[1]) if len(row) > 1 and row[1] != "" else 0.0
                             r = float(row[2]) if len(row) > 2 and row[2] != "" else 0.0
@@ -411,6 +465,13 @@ class ThrustStandGUI(QMainWindow):
                             v = float(row[4]) if len(row) > 4 and row[4] != "" else 0.0
                             c = float(row[5]) if len(row) > 5 and row[5] != "" else 0.0
                             p = float(row[6]) if len(row) > 6 and row[6] != "" else None
+                            # Extract throttle: try column 7 first, or use throttle_idx if found
+                            if throttle_idx is not None and len(row) > throttle_idx:
+                                thr = float(row[throttle_idx]) if row[throttle_idx] != "" else 0.0
+                            elif len(row) > 7 and row[7] != "":
+                                thr = float(row[7])
+                            else:
+                                thr = 0.0
                             ts_str = None
                     except Exception:
                         continue
@@ -425,23 +486,34 @@ class ThrustStandGUI(QMainWindow):
                         currents.append(c)
                         if p is not None:
                             powers.append(p)
+                        throttles.append(thr)
         except Exception as e:
             QMessageBox.critical(self, "History Load Error", str(e))
             return
 
-        # Update plots
+        # If no throttle data was found, create zeros
+        if len(throttles) != len(times):
+            throttles = [0.0] * len(times)
+        
         time_array = np.array(times) if len(times) > 0 else np.array([])
-        def set_curve(plot, data):
-            if len(time_array) > 0 and len(data) == len(time_array):
-                plot['curve'].setData(time_array, np.array(data))
-                plot['widget'].setXRange(max(0, time_array[0]), time_array[-1], padding=0.02)
+        throttle_array = np.array(throttles) if len(throttles) > 0 else np.array([])
+        
+        def set_curve(plot, data, x_data):
+            if len(x_data) > 0 and len(data) == len(x_data):
+                plot['curve'].setData(x_data, np.array(data))
+                if len(x_data) > 0:
+                    plot['widget'].setXRange(max(0, x_data[0]), x_data[-1], padding=0.02)
             else:
                 plot['curve'].setData([], [])
-        set_curve(self.h_thrust_plot, thrusts)
-        set_curve(self.h_rpm_plot, rpms)
-        set_curve(self.h_temp_plot, temps)
-        set_curve(self.h_voltage_plot, volts)
-        set_curve(self.h_current_plot, currents)
+        
+        # Use throttle or time based on domain setting
+        x_axis_data = throttle_array if self.use_throttle_domain and len(throttle_array) > 0 else time_array
+        
+        set_curve(self.h_thrust_plot, thrusts, x_axis_data)
+        set_curve(self.h_rpm_plot, rpms, x_axis_data)
+        set_curve(self.h_temp_plot, temps, x_axis_data)
+        set_curve(self.h_voltage_plot, volts, x_axis_data)
+        set_curve(self.h_current_plot, currents, x_axis_data)
         # Power: use CSV column if present; otherwise compute Voltage * Current
         if len(powers) != len(times):
             powers = []
@@ -450,7 +522,9 @@ class ThrustStandGUI(QMainWindow):
                     powers = (np.array(volts, dtype=float) * np.array(currents, dtype=float)).tolist()
                 except Exception:
                     powers = []
-        set_curve(self.h_power_plot, powers)
+        set_curve(self.h_power_plot, powers, x_axis_data)
+        # Throttle plot always uses time as x-axis (for reference)
+        set_curve(self.h_throttle_plot, throttles, time_array)
 
         # Update table
         cols = ['Time (s)', 'Thrust (g)', 'RPM', 'Temperature (°C)', 'Voltage (V)', 'Current (A)', 'Power (W)']
@@ -523,6 +597,11 @@ class ThrustStandGUI(QMainWindow):
         self.current_value_label.setStyleSheet(label_style + "background-color: #f3e5f5; color: #6a1b9a;")
         data_layout.addWidget(self.current_value_label)
         
+        # Throttle
+        self.throttle_value_label = QLabel("Throttle: --- %")
+        self.throttle_value_label.setStyleSheet(label_style + "background-color: #e0f2f1; color: #00695c;")
+        data_layout.addWidget(self.throttle_value_label)
+        
         # Add spacer
         data_layout.addStretch()
         
@@ -540,6 +619,7 @@ class ThrustStandGUI(QMainWindow):
         plot_widget.setBackground(bg)
         plot_widget.setTitle(title, color=fg, size='12pt')
         plot_widget.setLabel('left', y_label, color=fg)
+        # X-axis label will be updated dynamically based on domain toggle
         plot_widget.setLabel('bottom', 'Time (s)', color=fg)
         plot_widget.showGrid(x=True, y=True, alpha=0.3)
         
@@ -649,6 +729,8 @@ class ThrustStandGUI(QMainWindow):
                 self.serial_reader.connect(port)
                 self.connect_btn.setText("Disconnect")
                 self.start_btn.setEnabled(True)
+                self.stop_motor_btn.setEnabled(True)
+                self.procedure_btn.setEnabled(True)
                 self.status_label.setText(f"Status: Connected to {port}")
                 self.status_label.setStyleSheet("color: green; font-weight: bold; font-size: 12pt;")
                 
@@ -659,6 +741,8 @@ class ThrustStandGUI(QMainWindow):
             self.serial_reader.disconnect()
             self.connect_btn.setText("Connect")
             self.start_btn.setEnabled(False)
+            self.stop_motor_btn.setEnabled(False)
+            self.procedure_btn.setEnabled(False)
             self.status_label.setText("Status: Disconnected")
             self.status_label.setStyleSheet("color: red; font-weight: bold; font-size: 12pt;")
     
@@ -672,6 +756,7 @@ class ThrustStandGUI(QMainWindow):
         self.voltage_data.clear()
         self.current_data.clear()
         self.power_data.clear()
+        self.throttle_data.clear()
         self.timestamp_data.clear()
         self.time_history = []
         self.thrust_history = []
@@ -680,6 +765,7 @@ class ThrustStandGUI(QMainWindow):
         self.voltage_history = []
         self.current_history = []
         self.power_history = []
+        self.throttle_history = []
         self.timestamp_history = []
         self.start_time = 0
         
@@ -711,6 +797,20 @@ class ThrustStandGUI(QMainWindow):
             self.status_label.setText(f"Status: Connected (Test Stopped)")
             self.status_label.setStyleSheet("color: green; font-weight: bold; font-size: 12pt;")
     
+    def stop_motor(self):
+        """Stop the motor immediately."""
+        if self.serial_reader.is_connected:
+            self.serial_reader.send_command("s")
+            self.status_label.setText("Status: Motor Stopped")
+            self.status_label.setStyleSheet("color: orange; font-weight: bold; font-size: 12pt;")
+    
+    def run_procedure(self):
+        """Run the automated throttle ramp procedure."""
+        if self.serial_reader.is_connected:
+            self.serial_reader.send_command("procedure")
+            self.status_label.setText("Status: Running Auto Procedure")
+            self.status_label.setStyleSheet("color: blue; font-weight: bold; font-size: 12pt;")
+    
     def update_plots(self):
         """Read data and update all plots."""
         data = self.serial_reader.read_data()
@@ -739,7 +839,8 @@ class ThrustStandGUI(QMainWindow):
         temp_val = data.get('temperature', 0) or 0
         voltage_val = data.get('voltage', 0) or 0
         current_val = data.get('current', 0) or 0
-        power_val = voltage_val * current_val
+        power_val = data.get('power', 0) or (voltage_val * current_val)
+        throttle_val = data.get('throttle', 0) or 0
         
         self.thrust_data.append(thrust_val)
         self.rpm_data.append(rpm_val)
@@ -747,12 +848,14 @@ class ThrustStandGUI(QMainWindow):
         self.voltage_data.append(voltage_val)
         self.current_data.append(current_val)
         self.power_data.append(power_val)
+        self.throttle_data.append(throttle_val)
         self.thrust_history.append(thrust_val)
         self.rpm_history.append(rpm_val)
         self.temperature_history.append(temp_val)
         self.voltage_history.append(voltage_val)
         self.current_history.append(current_val)
         self.power_history.append(power_val)
+        self.throttle_history.append(throttle_val)
         
         # Update live value labels (and timestamp at top)
         self.timestamp_label.setText(f"Time: {timestamp_str}")
@@ -761,62 +864,142 @@ class ThrustStandGUI(QMainWindow):
         self.temp_value_label.setText(f"Temp: {temp_val:.1f} °C")
         self.voltage_value_label.setText(f"Voltage: {voltage_val:.2f} V")
         self.current_value_label.setText(f"Current: {current_val:.3f} A")
+        self.throttle_value_label.setText(f"Throttle: {throttle_val:.1f} %")
         
         # Update plots (display-only downsampling to reduce visual density)
-        time_array = np.array(self.time_data)
-        def decimate_by_time(x, y, step_s):
-            if len(x) == 0:
-                return x, y
-            dx = []
-            dy = []
-            last_t = None
-            for xi, yi in zip(x, y):
-                if last_t is None or (xi - last_t) >= step_s:
-                    dx.append(xi)
-                    dy.append(yi)
-                    last_t = xi
-                else:
-                    # replace last sample in current bin with the latest value
-                    dx[-1] = xi
-                    dy[-1] = yi
-            return np.array(dx), np.array(dy)
-        
-        if self.plots['thrust']['visible']:
-            thrust_array = np.array(self.thrust_data)
-            dx, dy = decimate_by_time(time_array, thrust_array, self.display_step_s)
-            self.plots['thrust']['curve'].setData(dx, dy)
-        
-        if self.plots['rpm']['visible']:
-            rpm_array = np.array(self.rpm_data)
-            dx, dy = decimate_by_time(time_array, rpm_array, self.display_step_s)
-            self.plots['rpm']['curve'].setData(dx, dy)
-        
-        if self.plots['temperature']['visible']:
-            temp_array = np.array(self.temperature_data)
-            dx, dy = decimate_by_time(time_array, temp_array, self.display_step_s)
-            self.plots['temperature']['curve'].setData(dx, dy)
-        
-        if self.plots['voltage']['visible']:
-            volt_array = np.array(self.voltage_data)
-            dx, dy = decimate_by_time(time_array, volt_array, self.display_step_s)
-            self.plots['voltage']['curve'].setData(dx, dy)
-        
-        if self.plots['current']['visible']:
-            curr_array = np.array(self.current_data)
-            dx, dy = decimate_by_time(time_array, curr_array, self.display_step_s)
-            self.plots['current']['curve'].setData(dx, dy)
-        if self.plots['power']['visible']:
-            power_array = np.array(self.power_data)
-            dx, dy = decimate_by_time(time_array, power_array, self.display_step_s)
-            self.plots['power']['curve'].setData(dx, dy)
-        
-        # Keep time axis from going negative
-        if len(time_array) > 0:
-            min_time = max(0, time_array[0])
-            max_time = max(10, time_array[-1])
-            for plot_name, plot_info in self.plots.items():
-                if plot_info['visible']:
-                    plot_info['widget'].setXRange(min_time, max_time, padding=0.02)
+        if self.use_throttle_domain:
+            # Use throttle as x-axis
+            throttle_array = np.array(self.throttle_data)
+            
+            # Sort by throttle for cleaner plots (remove duplicates at same throttle)
+            def prepare_throttle_data(x_data, y_data):
+                if len(x_data) == 0 or len(y_data) == 0:
+                    return np.array([]), np.array([])
+                # Create pairs and sort by throttle
+                pairs = list(zip(x_data, y_data))
+                # Remove duplicates at same throttle (keep last value)
+                throttle_dict = {}
+                for x, y in pairs:
+                    throttle_dict[x] = y
+                sorted_pairs = sorted(throttle_dict.items())
+                if len(sorted_pairs) == 0:
+                    return np.array([]), np.array([])
+                x_sorted, y_sorted = zip(*sorted_pairs)
+                return np.array(x_sorted), np.array(y_sorted)
+            
+            if self.plots['thrust']['visible']:
+                thrust_array = np.array(self.thrust_data)
+                x_vals, y_vals = prepare_throttle_data(throttle_array, thrust_array)
+                self.plots['thrust']['curve'].setData(x_vals, y_vals)
+            
+            if self.plots['rpm']['visible']:
+                rpm_array = np.array(self.rpm_data)
+                x_vals, y_vals = prepare_throttle_data(throttle_array, rpm_array)
+                self.plots['rpm']['curve'].setData(x_vals, y_vals)
+            
+            if self.plots['temperature']['visible']:
+                temp_array = np.array(self.temperature_data)
+                x_vals, y_vals = prepare_throttle_data(throttle_array, temp_array)
+                self.plots['temperature']['curve'].setData(x_vals, y_vals)
+            
+            if self.plots['voltage']['visible']:
+                volt_array = np.array(self.voltage_data)
+                x_vals, y_vals = prepare_throttle_data(throttle_array, volt_array)
+                self.plots['voltage']['curve'].setData(x_vals, y_vals)
+            
+            if self.plots['current']['visible']:
+                curr_array = np.array(self.current_data)
+                x_vals, y_vals = prepare_throttle_data(throttle_array, curr_array)
+                self.plots['current']['curve'].setData(x_vals, y_vals)
+            
+            if self.plots['power']['visible']:
+                power_array = np.array(self.power_data)
+                x_vals, y_vals = prepare_throttle_data(throttle_array, power_array)
+                self.plots['power']['curve'].setData(x_vals, y_vals)
+            
+            # Throttle plot always uses time as x-axis (for reference mapping)
+            if self.plots['throttle']['visible']:
+                time_array = np.array(self.time_data)
+                throttle_array = np.array(self.throttle_data)
+                dx, dy = decimate_by_time(time_array, throttle_array, self.display_step_s)
+                self.plots['throttle']['curve'].setData(dx, dy)
+            
+            # Set throttle range (throttle plot uses time axis, so set it separately)
+            if len(throttle_array) > 0:
+                min_throttle = max(0, np.min(throttle_array))
+                max_throttle = min(100, np.max(throttle_array))
+                time_array = np.array(self.time_data)
+                for plot_name, plot_info in self.plots.items():
+                    if plot_info['visible']:
+                        if plot_name == 'throttle':
+                            # Throttle plot always uses time axis
+                            if len(time_array) > 0:
+                                plot_info['widget'].setXRange(max(0, time_array[0]), time_array[-1], padding=0.02)
+                        else:
+                            plot_info['widget'].setXRange(min_throttle, max_throttle, padding=0.02)
+        else:
+            # Use time as x-axis (original behavior)
+            time_array = np.array(self.time_data)
+            def decimate_by_time(x, y, step_s):
+                if len(x) == 0:
+                    return x, y
+                dx = []
+                dy = []
+                last_t = None
+                for xi, yi in zip(x, y):
+                    if last_t is None or (xi - last_t) >= step_s:
+                        dx.append(xi)
+                        dy.append(yi)
+                        last_t = xi
+                    else:
+                        # replace last sample in current bin with the latest value
+                        dx[-1] = xi
+                        dy[-1] = yi
+                return np.array(dx), np.array(dy)
+            
+            if self.plots['thrust']['visible']:
+                thrust_array = np.array(self.thrust_data)
+                dx, dy = decimate_by_time(time_array, thrust_array, self.display_step_s)
+                self.plots['thrust']['curve'].setData(dx, dy)
+            
+            if self.plots['rpm']['visible']:
+                rpm_array = np.array(self.rpm_data)
+                dx, dy = decimate_by_time(time_array, rpm_array, self.display_step_s)
+                self.plots['rpm']['curve'].setData(dx, dy)
+            
+            if self.plots['temperature']['visible']:
+                temp_array = np.array(self.temperature_data)
+                dx, dy = decimate_by_time(time_array, temp_array, self.display_step_s)
+                self.plots['temperature']['curve'].setData(dx, dy)
+            
+            if self.plots['voltage']['visible']:
+                volt_array = np.array(self.voltage_data)
+                dx, dy = decimate_by_time(time_array, volt_array, self.display_step_s)
+                self.plots['voltage']['curve'].setData(dx, dy)
+            
+            if self.plots['current']['visible']:
+                curr_array = np.array(self.current_data)
+                dx, dy = decimate_by_time(time_array, curr_array, self.display_step_s)
+                self.plots['current']['curve'].setData(dx, dy)
+            
+            if self.plots['power']['visible']:
+                power_array = np.array(self.power_data)
+                dx, dy = decimate_by_time(time_array, power_array, self.display_step_s)
+                self.plots['power']['curve'].setData(dx, dy)
+            
+            # Throttle plot (always vs time for reference)
+            if self.plots['throttle']['visible']:
+                throttle_array = np.array(self.throttle_data)
+                dx, dy = decimate_by_time(time_array, throttle_array, self.display_step_s)
+                self.plots['throttle']['curve'].setData(dx, dy)
+            
+            # Keep time axis from going negative
+            if len(time_array) > 0:
+                min_time = max(0, time_array[0])
+                max_time = max(10, time_array[-1])
+                for plot_name, plot_info in self.plots.items():
+                    if plot_info['visible']:
+                        plot_info['widget'].setXRange(min_time, max_time, padding=0.02)
     
     def toggle_plot(self, measurement, state):
         """Show or hide a plot."""
@@ -824,15 +1007,47 @@ class ThrustStandGUI(QMainWindow):
         self.plots[measurement]['visible'] = is_checked
         self.plots[measurement]['widget'].setVisible(is_checked)
     
+    def toggle_domain(self, state):
+        """Toggle x-axis between time and throttle."""
+        self.use_throttle_domain = state == 2  # Qt.Checked
+        # Update all plot axis labels
+        x_label = 'Throttle (%)' if self.use_throttle_domain else 'Time (s)'
+        fg = (255, 255, 255) if self.is_dark_mode else (0, 0, 0)
+        
+        # Update live plots (throttle plot always uses time)
+        for plot_name, plot_info in self.plots.items():
+            if plot_name == 'throttle':
+                # Throttle plot always uses time as x-axis
+                plot_info['widget'].setLabel('bottom', 'Time (s)', color=fg)
+                plot_info['widget'].getAxis('bottom').setLabel('Time (s)', color=fg)
+            else:
+                plot_info['widget'].setLabel('bottom', x_label, color=fg)
+                plot_info['widget'].getAxis('bottom').setLabel(x_label, color=fg)
+        
+        # Update history plots (throttle plot always uses time)
+        for plot_info in [self.h_thrust_plot, self.h_rpm_plot, self.h_temp_plot, 
+                          self.h_voltage_plot, self.h_current_plot, self.h_power_plot]:
+            plot_info['widget'].setLabel('bottom', x_label, color=fg)
+            plot_info['widget'].getAxis('bottom').setLabel(x_label, color=fg)
+        
+        # Throttle plot always uses time as x-axis
+        self.h_throttle_plot['widget'].setLabel('bottom', 'Time (s)', color=fg)
+        self.h_throttle_plot['widget'].getAxis('bottom').setLabel('Time (s)', color=fg)
+        
+        # Trigger plot update to redraw with new domain
+        if len(self.time_data) > 0:
+            self.update_plots()
+        
+        # If a history file is currently loaded, reload it to update plots
+        current_history = self.history_list.currentItem()
+        if current_history:
+            self.load_history_file(current_history.text())
+    
     def autoscale_plots(self):
         """Auto-scale all visible plots to fit data perfectly."""
         if len(self.time_history) == 0:
             QMessageBox.information(self, "No Data", "No data to scale. Start a test first.")
             return
-        
-        time_array = np.array(self.time_history)
-        min_time = max(0, time_array[0])  # Never go negative
-        max_time = time_array[-1]
         
         # Auto-scale each visible plot
         data_map = {
@@ -841,15 +1056,36 @@ class ThrustStandGUI(QMainWindow):
             'temperature': self.temperature_history,
             'voltage': self.voltage_history,
             'current': self.current_history,
-            'power': self.power_history
+            'power': self.power_history,
+            'throttle': self.throttle_history
         }
+        
+        if self.use_throttle_domain:
+            # Use throttle for x-axis
+            throttle_array = np.array(self.throttle_history)
+            if len(throttle_array) > 0:
+                min_x = max(0, np.min(throttle_array))
+                max_x = min(100, np.max(throttle_array))
+            else:
+                min_x, max_x = 0, 100
+        else:
+            # Use time for x-axis
+            time_array = np.array(self.time_history)
+            min_x = max(0, time_array[0])  # Never go negative
+            max_x = time_array[-1]
         
         for plot_name, plot_info in self.plots.items():
             if plot_info['visible'] and len(data_map[plot_name]) > 0:
                 data_array = np.array(data_map[plot_name])
                 
-                # Set X range (time) - never negative
-                plot_info['widget'].setXRange(min_time, max_time, padding=0.02)
+                # Throttle plot always uses time for x-axis
+                if plot_name == 'throttle':
+                    time_array = np.array(self.time_history)
+                    if len(time_array) > 0:
+                        plot_info['widget'].setXRange(max(0, time_array[0]), time_array[-1], padding=0.02)
+                else:
+                    # Set X range based on domain
+                    plot_info['widget'].setXRange(min_x, max_x, padding=0.02)
                 
                 # Set Y range with padding
                 min_val = np.min(data_array)
@@ -899,11 +1135,12 @@ class ThrustStandGUI(QMainWindow):
                 writer.writerow(['Propeller', self.prop_type_input.text() or ''])
                 writer.writerow(["Exported", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
                 writer.writerow([])
-                # Header — Timestamp (HH:MM:SS.sss), Elapsed (s), Thrust, RPM, Temp, Voltage, Current, Power
-                writer.writerow(['Timestamp (HH:MM:SS.sss)', 'Elapsed (s)', 'Thrust (g)', 'RPM', 'Temperature (°C)', 'Voltage (V)', 'Current (A)', 'Power (W)'])
+                # Header — Timestamp (HH:MM:SS.sss), Elapsed (s), Thrust, RPM, Temp, Voltage, Current, Power, Throttle
+                writer.writerow(['Timestamp (HH:MM:SS.sss)', 'Elapsed (s)', 'Thrust (g)', 'RPM', 'Temperature (°C)', 'Voltage (V)', 'Current (A)', 'Power (W)', 'Throttle (%)'])
                 
                 # Write data rows
                 for i in range(len(self.time_history)):
+                    throttle_val = self.throttle_history[i] if i < len(self.throttle_history) else 0.0
                     writer.writerow([
                         self.timestamp_history[i] if i < len(self.timestamp_history) else '',
                         f"{self.time_history[i]:.3f}",
@@ -912,7 +1149,8 @@ class ThrustStandGUI(QMainWindow):
                         f"{self.temperature_history[i]:.2f}",
                         f"{self.voltage_history[i]:.3f}",
                         f"{self.current_history[i]:.3f}",
-                        f"{self.power_history[i]:.3f}"
+                        f"{self.power_history[i]:.3f}",
+                        f"{throttle_val:.1f}"
                     ])
             
             QMessageBox.information(self, "Export Successful", f"Data exported to:\n{filename}")
