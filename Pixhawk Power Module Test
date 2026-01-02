@@ -1,0 +1,79 @@
+/*
+ * Power Module Monitor for 4S LiPo (14.8V) & 90A Sensor
+ * Setup: Arduino powered by USB, Power Module Pin 1 DISCONNECTED.
+ */
+
+// --- CALIBRATION SETTINGS ---
+const float V_REF = 5.00;      // STEP 1: Measure 5V pin with multimeter and update this!
+const float VOLT_SCALE = 10.1; // Typical for Pixhawk modules (Volt = V_analog * 10.1)
+const float CURR_SCALE = 27.5; // Typical for 90A modules (36.36mV/A -> 1/0.03636)
+const int SAMPLES = 20;        // Number of samples for averaging
+
+// --- PINS ---
+const int voltPin = A1; 
+const int currPin = A0;
+
+float currentOffset = 0;
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  
+  Serial.println("--- Power Module Initializing ---");
+  
+  // Auto-calibrate zero-current offset
+  // Ensure motor is OFF when starting the Arduino
+  Serial.print("Calibrating zero-offset... ");
+  long offsetRaw = 0;
+  for(int i=0; i<50; i++) {
+    offsetRaw += analogRead(currPin);
+    delay(10);
+  }
+  currentOffset = (float)offsetRaw / 50.0;
+  Serial.println("Done.");
+  Serial.print("Zero Offset Raw Value: "); Serial.println(currentOffset);
+  Serial.println("V (Volts) | A (Amps) | W (Watts) | mAh (Capacity)");
+  Serial.println("------------------------------------------------");
+}
+
+unsigned long lastTime = 0;
+float totalMilliAmpSeconds = 0;
+
+void loop() {
+  float rawVolt = 0;
+  float rawCurr = 0;
+
+  // Take averaged readings to smooth out motor noise
+  for(int i=0; i<SAMPLES; i++) {
+    rawVolt += analogRead(voltPin);
+    rawCurr += analogRead(currPin);
+    delay(1); 
+  }
+  
+  // Calculate average raw values
+  float avgRawV = rawVolt / SAMPLES;
+  float avgRawC = (rawCurr / SAMPLES) - currentOffset; // Subtract the zero-load noise
+
+  // Convert to actual Volts and Amps
+  float voltage = (avgRawV * V_REF / 1023.0) * VOLT_SCALE;
+  float current = (avgRawC * V_REF / 1023.0) * CURR_SCALE;
+
+  // Prevent negative current readings due to tiny noise fluctuations
+  if (current < 0.1) current = 0; 
+
+  float power = voltage * current;
+
+  // Track Capacity (mAh) - useful for battery health
+  unsigned long currentTime = millis();
+  float durationHours = (currentTime - lastTime) / 3600000.0;
+  totalMilliAmpSeconds += (current * 1000.0) * durationHours;
+  lastTime = currentTime;
+
+  // Output to Serial Monitor
+  Serial.print("V: "); Serial.print(voltage, 2);
+  Serial.print("  A: "); Serial.print(current, 2);
+  Serial.print("  W: "); Serial.print(power, 1);
+  Serial.print("  mAh: "); Serial.println(totalMilliAmpSeconds, 1);
+
+  delay(200); // 5Hz update rate
+}
