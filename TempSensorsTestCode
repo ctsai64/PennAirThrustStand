@@ -1,0 +1,36 @@
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
+#define ONE_WIRE_BUS 4
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+
+// REPLACE THESE with the addresses you found with scanner
+DeviceAddress escSensor = { 0x28, 0xFF, 0x64, 0x1E, 0x12, 0x34, 0x56, 0x78 };
+DeviceAddress lipoSensor = { 0x28, 0xFF, 0xBC, 0x2A, 0x87, 0x65, 0x43, 0x21 };
+
+void setup() {
+  Serial.begin(115200);
+  sensors.begin();
+  
+  // Set resolution to 10-bit (faster updates, 0.25°C precision)
+  sensors.setResolution(escSensor, 10);
+  sensors.setResolution(lipoSensor, 10);
+}
+
+void loop() {
+  sensors.requestTemperatures(); // Tell all sensors to take a reading
+
+  float escTempF = sensors.getTempF(escSensor);
+  float lipoTempF = sensors.getTempF(lipoSensor);
+
+  Serial.print("ESC Temp: ");
+  Serial.print(escTempF);
+  Serial.print("°F | ");
+
+  Serial.print("LiPo Temp: ");
+  Serial.print(lipoTempF);
+  Serial.println("°F");
+
+  delay(500); // 2Hz update is plenty for heat monitoring
+}
