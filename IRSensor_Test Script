@@ -21,16 +21,16 @@ void setup() {
 
 void loop() {
   // Read Ambient Temperature (The air around the sensor)
-  float ambientC = mlx.readAmbientTempC();
-  float ambientF = mlx.readAmbientTempF();
+  // float ambientC = mlx.readAmbientTempC();
+  // float ambientF = mlx.readAmbientTempF();
 
   // Read Object Temperature (The motor surface)
   float objectC = mlx.readObjectTempC();
   float objectF = mlx.readObjectTempF();
 
   // Print Results
-  Serial.print("Ambient: "); 
-  Serial.print(ambientF); Serial.print("°F  |  ");
+  // Serial.print("Ambient: "); 
+  // Serial.print(ambientF); Serial.print("°F  |  ");
   
   Serial.print("Motor (Object): "); 
   Serial.print(objectF); Serial.println("°F");
