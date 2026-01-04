@@ -1,58 +1,47 @@
-// Note changed baud rate
-// Hall Effect / Phase Sensor RPM Counter
-const int hallPin = 5;          // Hall sensor or Phase sensor signal pin
+// ESP32 Brushless RPM Counter
+const int hallPin = 14;          // Use GPIO 14 on ESP32
 volatile unsigned long pulseCount = 0;
 unsigned long lastTime = 0;
 
 // --- MOTOR CONFIGURATION ---
-const int poleCount = 14;       // Total magnets in the motor (e.g., 12, 14, 22)
-const int interval = 500;       // Calculate every 500ms for faster updates
+const int poleCount = 14;       // Adjust for your motor
+const int interval = 500;       
 // ---------------------------
 
 float rpm = 0;
-float smoothedRPM = 0;
 
-// Interrupt Service Routine
+// This attribute is REQUIRED for ESP32 interrupts
 void IRAM_ATTR countPulse() {
   pulseCount++;
 }
 
 void setup() {
-  // Use INPUT_PULLUP if using an A3144 or open-collector phase sensor
+  // Use INPUT if you have an external voltage divider
+  // Use INPUT_PULLUP if you are connecting directly (proceed with caution)
   pinMode(hallPin, INPUT_PULLUP); 
-  Serial.begin(115200); // Higher baud rate for high-speed data
+  
+  Serial.begin(115200); 
 
+  // ESP32 syntax for attaching interrupts
   attachInterrupt(digitalPinToInterrupt(hallPin), countPulse, FALLING);
-  Serial.println("Test Stand Ready. Measuring RPM...");
+  
+  Serial.println("ESP32 Test Stand Ready.");
 }
 
 void loop() {
   unsigned long currentTime = millis();
 
   if (currentTime - lastTime >= interval) {
-    // 1. Grab count safely
     noInterrupts();
     unsigned long count = pulseCount;
     pulseCount = 0;
     interrupts();
 
-    // 2. The Math
-    // Frequency (pulses per second) = count / (interval / 1000)
-    // For 3-phase phase sensing: RPM = (Freq * 60) / (Poles / 2)
-    
+    // RPM = (Pulses_per_second * 60) / Pole_Pairs
     float pulsesPerMinute = (count * 60000.0) / interval;
-    float polePairs = poleCount / 2.0;
-    
-    rpm = pulsesPerMinute / polePairs;
+    rpm = pulsesPerMinute / (poleCount / 2.0);
 
-    // 3. Smoothing (Simple Low-Pass Filter)
-    smoothedRPM = (rpm * 0.7) + (smoothedRPM * 0.3);
-
-    // 4. Output
-    Serial.print("Raw RPM: ");
-    Serial.print(rpm);
-    Serial.print(" | Smoothed RPM: ");
-    Serial.println(smoothedRPM);
+    Serial.printf("Motor RPM: %.0f\n", rpm);
 
     lastTime = currentTime;
   }
