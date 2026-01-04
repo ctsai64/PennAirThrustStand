@@ -1,0 +1,40 @@
+#include <Wire.h>
+#include <Adafruit_MLX90614.h>
+
+Adafruit_MLX90614 mlx = Adafruit_MLX90614();
+
+void setup() {
+  Serial.begin(115200); // ESPs usually use 115200 baud
+  while (!Serial);      // Wait for Serial Monitor to open
+
+  Serial.println("MLX90614 Test - Non-Contact Motor Sensing");
+
+  // Initialize I2C with ESP32 default pins (SDA 21, SCL 22)
+  // If using ESP8266, Wire.begin() defaults to D2/D1
+  if (!mlx.begin()) {
+    Serial.println("Error connecting to MLX sensor. Check wiring.");
+    while (1);
+  };
+
+  Serial.println("Sensor Found!");
+}
+
+void loop() {
+  // Read Ambient Temperature (The air around the sensor)
+  float ambientC = mlx.readAmbientTempC();
+  float ambientF = mlx.readAmbientTempF();
+
+  // Read Object Temperature (The motor surface)
+  float objectC = mlx.readObjectTempC();
+  float objectF = mlx.readObjectTempF();
+
+  // Print Results
+  Serial.print("Ambient: "); 
+  Serial.print(ambientF); Serial.print("°F  |  ");
+  
+  Serial.print("Motor (Object): "); 
+  Serial.print(objectF); Serial.println("°F");
+
+  // Delay for readability - 500ms is good for a test stand
+  delay(500);
+}
