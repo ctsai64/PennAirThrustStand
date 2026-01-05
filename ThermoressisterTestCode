@@ -1,0 +1,55 @@
+#include <Arduino.h>
+#include <math.h>
+
+const int THERMISTOR_PIN = 34;   // ADC pin (GPIO 32–39 recommended)
+
+// Thermistor parameters
+const float R_FIXED = 100000.0;  // 100k fixed resistor
+const float R0 = 100000.0;       // 100k at 25C
+const float BETA = 3950.0;       // B-value
+const float T0 = 298.15;         // 25C in Kelvin
+const float VCC = 3.3;
+
+// Number of samples to average
+const int NUM_SAMPLES = 20;
+
+void setup() {
+  Serial.begin(115200);
+
+  analogReadResolution(12);
+  analogSetAttenuation(ADC_11db); // allows reading up to ~3.3V
+
+  delay(500);
+}
+
+float readTemperatureC() {
+  long adcSum = 0;
+
+  for (int i = 0; i < NUM_SAMPLES; i++) {
+    adcSum += analogRead(THERMISTOR_PIN);
+    delay(2);
+  }
+
+  float adcAvg = adcSum / (float)NUM_SAMPLES;
+
+  float voltage = adcAvg / 4095.0 * VCC;
+
+  // Calculate thermistor resistance
+  float Rntc = R_FIXED * voltage / (VCC - voltage);
+
+  // Beta equation
+  float tempK = 1.0 / ( (1.0 / T0) + (log(Rntc / R0) / BETA) );
+  float tempC = tempK - 273.15;
+
+  return tempC;
+}
+
+void loop() {
+  float tempC = readTemperatureC();
+
+  Serial.print("Temperature: ");
+  Serial.print(tempC, 2);
+  Serial.println(" °C");
+
+  delay(500);
+}
